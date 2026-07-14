@@ -1,0 +1,7 @@
+requests
+pandas
+openpyxl
+playwright
+yt-dlp
+selenium
+webdriver-manager
