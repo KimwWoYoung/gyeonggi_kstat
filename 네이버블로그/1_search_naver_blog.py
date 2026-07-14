@@ -14,9 +14,11 @@
     python 1_search_naver_blog.py
 
 동작:
-    KEYWORDS 의 각 명소명으로 네이버 블로그 검색 API(sort=date, 최신순)를
-    페이지네이션하며 호출해 START_DATE~END_DATE 기간에 작성된 글만 골라
-    OUTPUT_CSV 에 저장한다. (검색 API는 키워드당 최대 1000건까지만 조회 가능)
+    KEYWORDS 의 각 명소명으로 네이버 블로그 검색 API(sort=SORT, 기본값
+    "sim"=정확도순)를 페이지네이션하며 호출해 START_DATE~END_DATE 기간에
+    작성된 글만 골라 OUTPUT_CSV 에 저장한다. (검색 API는 키워드당 최대
+    1000건까지만 조회 가능. 정확도순은 날짜순이 아니므로 조기 종료 없이
+    매 키워드마다 1000건을 끝까지 훑어서 기간에 맞는 것만 남긴다.)
 
     이 단계에서는 제목/링크/작성자(블로거)/작성일만 확보된다. 본문과
     조회수/좋아요수/댓글수는 2_crawl_naver_blog_detail.py 에서 실제 게시글
@@ -101,6 +103,8 @@ SEARCH_URL = "https://openapi.naver.com/v1/search/blog.json"
 START_DATE = "20260401"
 END_DATE = "20260630"
 
+SORT = "sim"  # "sim"=정확도순, "date"=최신순
+
 DISPLAY_PER_PAGE = 100
 MAX_START = 1000  # 네이버 검색 API 제약: start는 1~1000까지만 허용
 SLEEP_BETWEEN_CALLS_SEC = 0.5
@@ -125,7 +129,7 @@ def search_blog_in_range(keyword: str) -> list[dict]:
             "query": keyword,
             "display": DISPLAY_PER_PAGE,
             "start": start,
-            "sort": "date",  # 최신순
+            "sort": SORT,
         }
         resp = requests.get(SEARCH_URL, headers=headers, params=params, timeout=15)
         if resp.status_code != 200:
@@ -136,15 +140,13 @@ def search_blog_in_range(keyword: str) -> list[dict]:
         if not items:
             break
 
-        reached_before_start = False
         for item in items:
             postdate = item.get("postdate", "")  # 예: "20260615"
 
-            if postdate > END_DATE:
-                continue  # 기간보다 최신 -> 건너뜀
-            if postdate < START_DATE:
-                reached_before_start = True
-                continue  # 기간보다 과거 -> 건너뜀 (date 정렬이므로 이후도 계속 과거)
+            # 정확도순(sim)은 날짜순이 아니므로 끝까지 훑어서 기간에 맞는 것만 남긴다
+            # (최신순처럼 과거로 넘어갔다고 검색을 조기 종료할 수 없음)
+            if not (START_DATE <= postdate <= END_DATE):
+                continue
 
             rows.append({
                 "키워드": keyword,
@@ -155,7 +157,7 @@ def search_blog_in_range(keyword: str) -> list[dict]:
                 "URL": item.get("link", ""),
             })
 
-        if reached_before_start or len(items) < DISPLAY_PER_PAGE:
+        if len(items) < DISPLAY_PER_PAGE:
             break
 
         time.sleep(SLEEP_BETWEEN_CALLS_SEC)
