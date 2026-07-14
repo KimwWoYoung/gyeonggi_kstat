@@ -12,6 +12,69 @@ import time
 USERNAME = '***REMOVED***'
 PASSWORD = '***REMOVED***'
 
+# 관광지점 57곳 검색어 (경기관광 SNS 분석 키워드 엑셀의 '2. 관광지점' 시트와 동일)
+KEYWORDS = [
+    "구름산산림욕장",
+    "북한산국립공원",
+    "임진각",
+    "용문산",
+    "소요산",
+    "자라섬캠핑장",
+    "한탄강오토캠핑장",
+    "남한강자전거길",
+    "안산갈대습지공원",
+    "의정부실내빙상장",
+    "에버랜드",
+    "서울대공원",
+    "서울랜드",
+    "허브아일랜드",
+    "캐리비안베이",
+    "한국민속촌",
+    "아침고요수목원",
+    "안성팜랜드",
+    "경기도립물향기수목원",
+    "쁘띠프랑스",
+    "국립현대미술관 과천관",
+    "광명동굴",
+    "시화호조력발전소",
+    "아쿠아플라넷일산",
+    "한국잡월드",
+    "경기도어린이박물관",
+    "양평양떼목장",
+    "바라산자연휴양림",
+    "행주산성",
+    "남한산성행궁",
+    "포천아트밸리",
+    "헤이리예술마을",
+    "수원화성박물관",
+    "융건릉",
+    "세종대왕 영릉",
+    "장릉",
+    "동구릉",
+    "다산유적지",
+    "통일전망대",
+    "신구대학교식물원",
+    "세미원",
+    "시흥갯골생태공원",
+    "수리산입구",
+    "관악산자연학습장",
+    "대부해솔길",
+    "잣향기푸른숲",
+    "비둘기낭폭포",
+    "두물머리",
+    "마장호수",
+    "포천한탄강하늘다리",
+    "재인폭포",
+    "화성행궁",
+    "제3땅굴",
+    "송학김전시관",
+    "가평레일파크",
+    "대장금파크",
+    "스타필드수원",
+]
+
+OUTPUT_CSV = "instagram_links_all.csv"
+
 # 브라우저 설정
 options = Options()
 options.add_experimental_option("detach", True)
@@ -125,20 +188,13 @@ try:
 except:
     print("ℹ️ 팝업 없음")
 
-# 3. 해시태그 페이지 이동
-driver.get('https://www.instagram.com/explore/tags/구름산산림욕장/')
-time.sleep(3)
+# 3. 링크 수집 함수 (연속 3회 변화 없으면 자동 종료)
+# 57개 키워드를 전부 훑어야 하므로 키워드당 스크롤 상한을 적당히 낮춰둔다.
+# (인기 명소는 MAX_SCROLL_PER_KEYWORD 를 늘려 더 깊이 수집할 수 있다.)
+MAX_SCROLL_PER_KEYWORD = 150
 
-try:
-    WebDriverWait(driver, 15).until(
-        EC.presence_of_element_located((By.XPATH, '//a[contains(@href, "/p/")]'))
-    )
-    print("🏷️ 해시태그 페이지 접속 완료")
-except:
-    print("❌ 게시물 로딩 실패")
 
-# 4. 링크 수집 함수 (연속 3회 변화 없으면 자동 종료)
-def get_post_links(driver, max_count=40000, delay=2, max_scroll=500, stop_after_no_change=3):
+def get_post_links(driver, max_count=40000, delay=2, max_scroll=MAX_SCROLL_PER_KEYWORD, stop_after_no_change=3):
     links = set()
     scroll = 0
     prev_count = 0
@@ -171,11 +227,38 @@ def get_post_links(driver, max_count=40000, delay=2, max_scroll=500, stop_after_
 
     return list(links)
 
-# 5. 링크 수집 실행
-links = get_post_links(driver, max_count=40000, delay=2, max_scroll=500, stop_after_no_change=3)
 
-# 6. 저장
-df = pd.DataFrame({"링크": links})
-df.to_csv("구름산산림욕장.csv", index=False, encoding="utf-8-sig")
-print("✅ 총 수집된 링크 수:", len(links))
-print("📁 '구름산산림욕장.csv' 저장 완료!")
+# 4. 키워드 57개 전체 순회하며 해시태그 페이지에서 링크 수집
+# (인스타그램 해시태그는 공백을 허용하지 않으므로 태그 자체는 공백 제거,
+#  결과 테이블의 '키워드' 컬럼에는 원래 관광지점명을 그대로 남긴다)
+all_rows = []
+
+for idx, keyword in enumerate(KEYWORDS, start=1):
+    tag = keyword.replace(" ", "")
+    print(f"\n{'='*60}")
+    print(f"[{idx}/{len(KEYWORDS)}] 키워드: {keyword} (태그: #{tag})")
+    print(f"{'='*60}")
+
+    driver.get(f'https://www.instagram.com/explore/tags/{tag}/')
+    time.sleep(3)
+
+    try:
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.XPATH, '//a[contains(@href, "/p/")]'))
+        )
+        print("🏷️ 해시태그 페이지 접속 완료")
+    except Exception:
+        print("❌ 게시물 로딩 실패 (게시물이 없거나 페이지 구조 변경) → 건너뜀")
+        continue
+
+    links = get_post_links(driver)
+    print(f"✅ '{keyword}' 수집된 링크 수: {len(links)}")
+
+    for link in links:
+        all_rows.append({"키워드": keyword, "링크": link})
+
+    # 키워드 하나 끝날 때마다 누적 저장 (중간에 중단돼도 그동안 수집한 결과는 보존)
+    pd.DataFrame(all_rows).to_csv(OUTPUT_CSV, index=False, encoding="utf-8-sig")
+
+print(f"\n✅ 전체 수집 완료. 총 {len(all_rows)}건")
+print(f"📁 '{OUTPUT_CSV}' 저장 완료!")

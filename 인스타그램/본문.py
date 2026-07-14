@@ -14,11 +14,16 @@ USERNAME = '***REMOVED***'
 PASSWORD = '***REMOVED***'
 
 # =============================================
-# 크롤링할 URL 목록을 담은 CSV (링크 컬럼 필요)
+# 크롤링할 URL 목록을 담은 CSV (url.py 실행 결과, 키워드/링크 컬럼 필요)
 # =============================================
-INPUT_CSV = "구름산산림욕장.csv"
+INPUT_CSV = "instagram_links_all.csv"
 LINK_COLUMN = "링크"
-OUTPUT_FILE = "구름산산림욕장_본문결과.xlsx"
+KEYWORD_COLUMN = "키워드"
+OUTPUT_FILE = "instagram_posts_202604_202606.xlsx"
+
+# 수집 기간 (게시물 작성일 기준)
+START_DATE = "2026-04-01"
+END_DATE = "2026-06-30"
 
 
 # =============================================
@@ -165,22 +170,35 @@ def crawl_post(drv, url):
 login(driver)
 
 df_links = pd.read_csv(INPUT_CSV)
-urls = df_links[LINK_COLUMN].dropna().tolist()
-print(f"[📋] 크롤링할 URL {len(urls)}개")
+df_links = df_links.dropna(subset=[LINK_COLUMN])
+print(f"[📋] 크롤링할 URL {len(df_links)}개")
+print(f"[수집 기간] {START_DATE} ~ {END_DATE} (게시물 작성일 기준, 범위 밖은 제외)")
 
 results = []
-for idx, url in enumerate(urls):
-    print(f"\n[{idx+1}/{len(urls)}] 크롤링 중: {url}")
+in_range_count = 0
+for idx, row in df_links.reset_index(drop=True).iterrows():
+    url = row[LINK_COLUMN]
+    keyword = row.get(KEYWORD_COLUMN, "")
+    print(f"\n[{idx+1}/{len(df_links)}] 크롤링 중: {url}")
     try:
         content, date = crawl_post(driver, url)
     except Exception as e:
         content, date = f"❌ 크롤링 실패 → {e}", ""
 
-    results.append({"URL": url, "본문": content, "날짜": date})
+    date_only = date[:10] if isinstance(date, str) and len(date) >= 10 else ""
+    if not (START_DATE <= date_only <= END_DATE):
+        print(f"  ⏭️ 기간 밖 (날짜: {date_only or '추출 실패'}) → 제외")
+        time.sleep(random.uniform(2.5, 4.5))
+        continue
+
+    in_range_count += 1
+    results.append({"키워드": keyword, "URL": url, "본문": content, "날짜": date_only})
     print(f"  본문 일부: {content[:30]}...")
-    print(f"  날짜: {date}")
+    print(f"  날짜: {date_only}")
 
     time.sleep(random.uniform(2.5, 4.5))  # 요청 간격 랜덤화 (탐지 방지)
+
+print(f"\n[✅] 기간 내 게시물 {in_range_count}/{len(df_links)}건")
 
 # 저장
 df_result = pd.DataFrame(results)

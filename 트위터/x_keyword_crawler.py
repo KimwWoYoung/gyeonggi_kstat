@@ -12,11 +12,15 @@ X(트위터) 명소명 키워드 검색 크롤러 (공식 API v2 사용, Bearer 
     python x_keyword_crawler.py
 
 동작:
-    KEYWORDS 의 각 명소명으로 최근 검색(recent search, 최근 7일) API를 호출해
-    리트윗 제외 트윗을 TWEETS_PER_KEYWORD개까지 수집, OUTPUT_CSV 에 저장한다.
+    KEYWORDS 의 각 명소명으로 전체 아카이브 검색(full-archive search) API를
+    호출해, START_DATE~END_DATE(2026-04-01~2026-06-30) 기간의 리트윗 제외
+    트윗을 키워드당 TWEETS_PER_KEYWORD개까지 수집, OUTPUT_CSV 에 저장한다.
 
 주의:
-    - recent search 엔드포인트는 최근 7일 이내 트윗만 조회 가능(무료/기본 티어 기준).
+    - /2/tweets/search/all(전체 아카이브 검색)은 Pro/Enterprise/Academic 등
+      유료·상위 티어에서만 열려 있다. 무료/Basic 티어의 recent search는
+      "최근 7일" 데이터만 제공하므로 2026-04~06 과거 데이터는 조회할 수
+      없다 (해당 티어라면 이 스크립트를 실행해도 403/401이 발생한다).
     - 요청당 max_results는 10~100, 티어별 rate limit이 있으니 SLEEP_BETWEEN_CALLS_SEC 조절.
 """
 
@@ -91,11 +95,15 @@ KEYWORDS = [
 ]
 
 BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN", "").strip().strip('"')
-SEARCH_URL = "https://api.twitter.com/2/tweets/search/recent"
+SEARCH_URL = "https://api.twitter.com/2/tweets/search/all"
+
+# 수집 기간 (X API는 RFC3339 형식 요구)
+START_DATE = "2026-04-01T00:00:00Z"
+END_DATE = "2026-06-30T23:59:59Z"
 
 TWEETS_PER_KEYWORD = 50
 SLEEP_BETWEEN_CALLS_SEC = 2.0
-OUTPUT_CSV = Path("x_posts.csv")
+OUTPUT_CSV = Path("x_posts_202604_202606.csv")
 
 
 def fetch_tweets(keyword: str, count: int) -> list[dict]:
@@ -105,6 +113,8 @@ def fetch_tweets(keyword: str, count: int) -> list[dict]:
         "query": query,
         "max_results": min(max(count, 10), 100),
         "sort_order": "recency",
+        "start_time": START_DATE,
+        "end_time": END_DATE,
         "tweet.fields": "created_at,lang,public_metrics,text",
         "expansions": "author_id",
         "user.fields": "name,username,public_metrics,verified",
@@ -170,6 +180,7 @@ def main() -> None:
         return
 
     print("[X(트위터) 키워드 크롤링 시작]")
+    print(f"[수집 기간] {START_DATE} ~ {END_DATE}")
     print(f"[대상 키워드] {len(KEYWORDS)}개\n")
 
     start = time.time()

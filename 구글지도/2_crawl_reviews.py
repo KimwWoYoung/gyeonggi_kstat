@@ -8,25 +8,69 @@ import pandas as pd
 import time
 import re
 import os
+from datetime import datetime, timedelta
+
+from config import CSV_OUTPUT, CHROME_USER_DATA_DIR, CHROME_PROFILE
+
+# 수집 기간 (리뷰 작성일 기준)
+START_DATE = "2026-04-01"
+END_DATE = "2026-06-30"
+
+
+def parse_relative_date_kr(text: str, reference: datetime) -> "datetime | None":
+    """구글 리뷰의 상대적 날짜 텍스트("3개월 전" 등)를 절대 날짜로 근사 변환한다.
+    일/주/개월/년 단위이므로 실제 작성일과 최대 수 주 정도 오차가 있을 수 있다."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    if "방금" in text:
+        return reference
+    m = re.match(r"(\d+)\s*(초|분|시간|일|주|개월|달|년)\s*전", text)
+    if not m:
+        return None
+    n = int(m.group(1))
+    unit = m.group(2)
+    if unit == "초":
+        return reference - timedelta(seconds=n)
+    if unit == "분":
+        return reference - timedelta(minutes=n)
+    if unit == "시간":
+        return reference - timedelta(hours=n)
+    if unit == "일":
+        return reference - timedelta(days=n)
+    if unit == "주":
+        return reference - timedelta(weeks=n)
+    if unit in ("개월", "달"):
+        return reference - timedelta(days=n * 30)
+    if unit == "년":
+        return reference - timedelta(days=n * 365)
+    return None
+
 
 # 브라우저 설정
 options = webdriver.ChromeOptions()
 options.add_argument("--start-maximized")
+options.add_argument(f"--user-data-dir={CHROME_USER_DATA_DIR}")
+options.add_argument(f"--profile-directory={CHROME_PROFILE}")
 driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 wait = WebDriverWait(driver, 15)
 
-# CSV 파일 읽기
+# CSV 파일 읽기 (1_collect_urls.py 실행 결과)
 script_dir = os.path.dirname(os.path.abspath(__file__))
-csv_file = os.path.join(script_dir, 'Seoul_ThingsToDo.csv')
+csv_file = os.path.join(script_dir, CSV_OUTPUT)
 
 if not os.path.exists(csv_file):
     print(f"[❌] CSV 파일을 찾을 수 없습니다: {csv_file}")
+    print("     1_collect_urls.py 를 먼저 실행하세요.")
     exit(1)
 
 df = pd.read_csv(csv_file, encoding='utf-8-sig')
 
 # 전체 URL 처리 (리밋 없음)
-print(f"[📊] 총 {len(df)}개의 URL을 처리합니다.\n")
+print(f"[📊] 총 {len(df)}개의 URL을 처리합니다.")
+print(f"[수집 기간] {START_DATE} ~ {END_DATE} (리뷰 작성일 기준, 상대 날짜를 오늘 기준으로 근사 변환)\n")
+
+REFERENCE_NOW = datetime.now()
 
 all_restaurant_data = []
 all_reviews_data = []
@@ -334,12 +378,17 @@ for idx, row in df.iterrows():
                                         print(f"[⚠️] 리뷰 {i+1} 텍스트 추출 오류: {e}")
                                     
                                     if review_rating or review_text:
+                                        estimated_date = parse_relative_date_kr(review_date, REFERENCE_NOW)
+                                        estimated_date_str = estimated_date.strftime("%Y-%m-%d") if estimated_date else ""
+                                        if not (estimated_date_str and START_DATE <= estimated_date_str <= END_DATE):
+                                            continue  # 기간(2026-04~06) 밖으로 추정되는 리뷰는 제외
                                         reviews_data.append({
                                             "장소명": name,
                                             "URL": url,
                                             "ID": i+1,
                                             "별점": review_rating,
                                             "기간": review_date,
+                                            "추정날짜": estimated_date_str,
                                             "리뷰": review_text
                                         })
                                 except Exception as e:
@@ -384,7 +433,7 @@ for idx, row in df.iterrows():
 print(f"\n{'='*60}")
 print("[💾] 데이터 저장 중...")
 
-output_file = os.path.join(script_dir, 'Seoul_Reviews.xlsx')
+output_file = os.path.join(script_dir, 'gyeonggi_reviews_202604_202606.xlsx')
 
 with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
     pd.DataFrame(all_restaurant_data).to_excel(writer, sheet_name='장소정보', index=False)

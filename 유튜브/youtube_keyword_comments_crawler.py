@@ -9,13 +9,17 @@
 
 동작:
     KEYWORDS 의 각 명소명으로 유튜브를 검색해 상위 VIDEOS_PER_KEYWORD개 영상을 찾고,
-    각 영상의 댓글을 MAX_COMMENTS_PER_VIDEO개까지 수집해 OUTPUT_CSV 에 저장한다.
+    각 영상의 댓글을 MAX_COMMENTS_PER_VIDEO개까지 수집한 뒤, 댓글 작성일이
+    START_DATE~END_DATE(2026-04-01~2026-06-30) 기간인 것만 OUTPUT_CSV 에 저장한다.
+    (영상 자체의 업로드일은 제한하지 않는다 - 오래된 영상이라도 해당 기간에
+    달린 댓글은 대상에 포함된다.)
 """
 
 from __future__ import annotations
 
 import csv
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yt_dlp
@@ -83,7 +87,13 @@ KEYWORDS = [
 VIDEOS_PER_KEYWORD = 5
 MAX_COMMENTS_PER_VIDEO = 100
 SLEEP_BETWEEN_CALLS_SEC = 1.0
-OUTPUT_CSV = Path("youtube_comments.csv")
+OUTPUT_CSV = Path("youtube_comments_202604_202606.csv")
+
+# 수집 기간 (댓글 작성일 기준, UTC)
+START_DATE = "2026-04-01T00:00:00+00:00"
+END_DATE = "2026-06-30T23:59:59+00:00"
+START_TS = datetime.fromisoformat(START_DATE).timestamp()
+END_TS = datetime.fromisoformat(END_DATE).timestamp()
 
 SEARCH_OPTS = {
     "quiet": True,
@@ -116,6 +126,9 @@ def fetch_comments(video_id: str) -> list[dict]:
 
 
 def main() -> None:
+    print(f"[수집 기간] {START_DATE} ~ {END_DATE} (댓글 작성일 기준)")
+    print(f"[대상 키워드] {len(KEYWORDS)}개\n")
+
     rows: list[dict] = []
 
     for keyword in KEYWORDS:
@@ -139,7 +152,12 @@ def main() -> None:
                 print(f"    ! 댓글 수집 실패: {e}")
                 continue
 
+            in_range_count = 0
             for c in comments:
+                ts = c.get("timestamp")
+                if ts is None or not (START_TS <= ts <= END_TS):
+                    continue
+                in_range_count += 1
                 rows.append({
                     "keyword": keyword,
                     "video_id": video_id,
@@ -149,9 +167,10 @@ def main() -> None:
                     "author": c.get("author"),
                     "comment_text": (c.get("text") or "").replace("\n", " "),
                     "like_count": c.get("like_count"),
-                    "published_time": c.get("timestamp"),
+                    "published_time": datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
                     "is_reply": c.get("parent") != "root",
                 })
+            print(f"    -> 기간 내 댓글 {in_range_count}/{len(comments)}건")
             time.sleep(SLEEP_BETWEEN_CALLS_SEC)
         time.sleep(SLEEP_BETWEEN_CALLS_SEC)
 

@@ -25,6 +25,8 @@ options.add_argument("--start-maximized")
 options.add_argument("--disable-blink-features=AutomationControlled")
 options.add_experimental_option("excludeSwitches", ["enable-automation"])
 options.add_experimental_option("useAutomationExtension", False)
+options.add_argument(f"--user-data-dir={CHROME_USER_DATA_DIR}")
+options.add_argument(f"--profile-directory={CHROME_PROFILE}")
 driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 wait = WebDriverWait(driver, 15)
 
