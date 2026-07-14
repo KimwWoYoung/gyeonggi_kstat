@@ -14,6 +14,12 @@
     블로그 페이지(m.blog.naver.com)로 열어 본문, 공감수(좋아요 대체),
     댓글수를 추출해 OUTPUT_XLSX 에 저장한다.
 
+    URL 수가 많을 경우(수만 건) 몇 시간씩 걸릴 수 있으므로, 처리할 때마다
+    CHECKPOINT_CSV 에 한 건씩 바로 append해 중간에 중단돼도 그동안 수집한
+    데이터는 보존된다. 스크립트를 다시 실행하면 CHECKPOINT_CSV 에 이미
+    있는 URL은 건너뛰고 이어서 진행한다. 끝까지 완료되면 CHECKPOINT_CSV
+    전체 내용을 OUTPUT_XLSX 로도 저장한다.
+
 주의 (조회수 관련):
     네이버 블로그는 대부분 포스트 조회수를 블로그 주인에게만 공개하고
     방문자에게는 보여주지 않는다. 블로거가 별도로 방문자 위젯을 켜둔
@@ -30,6 +36,7 @@
 
 from __future__ import annotations
 
+import csv
 import re
 import time
 from pathlib import Path
@@ -38,7 +45,13 @@ import pandas as pd
 from playwright.sync_api import sync_playwright
 
 INPUT_CSV = "naver_blog_urls_202604_202606.csv"
+CHECKPOINT_CSV = "naver_blog_detail_202604_202606_checkpoint.csv"
 OUTPUT_XLSX = "naver_blog_detail_202604_202606.xlsx"
+
+FIELDNAMES = [
+    "키워드", "채널", "제목", "본문", "작성일", "작성자",
+    "조회수", "좋아요수", "댓글수", "URL",
+]
 
 BODY_SELECTORS = [
     "div.se-main-container",   # 스마트에디터 ONE/3
@@ -110,46 +123,65 @@ def main() -> None:
         return
 
     df = pd.read_csv(input_path, encoding="utf-8-sig")
-    print(f"[📋] 크롤링할 URL {len(df)}개")
+    print(f"[📋] 전체 URL {len(df)}개")
 
-    results = []
+    checkpoint_path = Path(CHECKPOINT_CSV)
+    done_urls: set[str] = set()
+    if checkpoint_path.exists():
+        prev = pd.read_csv(checkpoint_path, encoding="utf-8-sig")
+        done_urls = set(prev["URL"].dropna())
+        print(f"[⏩] 이전에 저장된 {len(done_urls)}건은 건너뜀 (이어서 진행)")
+    else:
+        with checkpoint_path.open("w", newline="", encoding="utf-8-sig") as f:
+            csv.DictWriter(f, fieldnames=FIELDNAMES).writeheader()
+
+    todo = df[~df["URL"].isin(done_urls)]
+    print(f"[📋] 이번에 크롤링할 URL {len(todo)}개\n")
+
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
         )
 
-        for idx, row in df.iterrows():
-            url = row["URL"]
-            print(f"\n[{idx + 1}/{len(df)}] {row.get('제목', '')[:40]!r}")
-            try:
-                detail = crawl_one(page, url)
-            except Exception as e:
-                print(f"  ! 크롤링 실패: {e}")
-                detail = {"본문": f"크롤링 실패: {e}", "좋아요수": "", "댓글수": "", "조회수": ""}
+        with checkpoint_path.open("a", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
 
-            results.append({
-                "키워드": row.get("키워드", ""),
-                "채널": row.get("채널", "네이버블로그"),
-                "제목": row.get("제목", ""),
-                "본문": detail["본문"],
-                "작성일": row.get("작성일", ""),
-                "작성자": row.get("작성자", ""),
-                "조회수": detail["조회수"],
-                "좋아요수": detail["좋아요수"],
-                "댓글수": detail["댓글수"],
-                "URL": url,
-            })
-            time.sleep(1.0)
+            try:
+                for idx, row in todo.iterrows():
+                    url = row["URL"]
+                    print(f"\n[{idx + 1}/{len(df)}] {row.get('제목', '')[:40]!r}")
+                    try:
+                        detail = crawl_one(page, url)
+                        body_len = len(detail["본문"])
+                        print(f"  본문 {body_len}자 / 좋아요 {detail['좋아요수'] or '-'} / 댓글 {detail['댓글수'] or '-'}"
+                              + ("  ⚠️ 본문 비어있음(선택자 확인 필요)" if body_len == 0 else ""))
+                    except Exception as e:
+                        print(f"  ! 크롤링 실패: {e}")
+                        detail = {"본문": f"크롤링 실패: {e}", "좋아요수": "", "댓글수": "", "조회수": ""}
+
+                    writer.writerow({
+                        "키워드": row.get("키워드", ""),
+                        "채널": row.get("채널", "네이버블로그"),
+                        "제목": row.get("제목", ""),
+                        "본문": detail["본문"],
+                        "작성일": row.get("작성일", ""),
+                        "작성자": row.get("작성자", ""),
+                        "조회수": detail["조회수"],
+                        "좋아요수": detail["좋아요수"],
+                        "댓글수": detail["댓글수"],
+                        "URL": url,
+                    })
+                    f.flush()  # 중단돼도 방금 쓴 줄까지는 파일에 남도록 즉시 반영
+                    time.sleep(1.0)
+            except KeyboardInterrupt:
+                print("\n[⏸️] 사용자 중단 감지. 지금까지 저장된 내용으로 마무리합니다.")
 
         browser.close()
 
-    out_df = pd.DataFrame(results, columns=[
-        "키워드", "채널", "제목", "본문", "작성일", "작성자",
-        "조회수", "좋아요수", "댓글수", "URL",
-    ])
+    out_df = pd.read_csv(checkpoint_path, encoding="utf-8-sig")
     out_df.to_excel(OUTPUT_XLSX, index=False)
-    print(f"\n[💾] {len(out_df)}건 저장 -> {Path(OUTPUT_XLSX).resolve()}")
+    print(f"\n[💾] 총 {len(out_df)}건 저장 -> {Path(OUTPUT_XLSX).resolve()}")
 
 
 if __name__ == "__main__":
