@@ -19,6 +19,12 @@
     본문/날짜/좋아요수/댓글수는 2_crawl_instagram_detail.py 에서 실제
     게시물 페이지를 열어 수집한다.
 
+    57개 키워드를 전부 도는 데 시간이 걸리므로, 키워드 하나가 끝날
+    때마다 CHECKPOINT_CSV 에 바로 append해 중간에 중단돼도 그동안 모은
+    데이터는 보존된다. 스크립트를 다시 실행하면 CHECKPOINT_CSV 에 이미
+    있는 키워드는 건너뛰고 이어서 진행한다. Ctrl+C로 중단해도 그때까지
+    저장된 내용으로 OUTPUT_CSV 를 만든다.
+
 주의:
     - 인스타그램은 로그인 자동화에 대한 탐지(체크포인트/2단계 인증 요구)가
       강해서, 특히 새로운 IP(서버/클라우드 환경)에서는 로그인 자체가
@@ -33,6 +39,7 @@
 
 from __future__ import annotations
 
+import csv
 import os
 import time
 from pathlib import Path
@@ -115,6 +122,7 @@ SCROLL_PAUSE_SEC = 2.0
 MAX_SCROLL_PER_KEYWORD = 60
 STOP_AFTER_NO_CHANGE = 3
 SLEEP_BETWEEN_KEYWORDS_SEC = 3.0
+CHECKPOINT_CSV = Path("instagram_links_checkpoint.csv")
 OUTPUT_CSV = Path("instagram_links.csv")
 
 FIELDNAMES = ["키워드", "채널", "URL"]
@@ -281,30 +289,46 @@ def main() -> None:
         print("[오류] 환경변수 INSTAGRAM_USERNAME / INSTAGRAM_PASSWORD 을 설정해주세요.")
         return
 
+    done_keywords: set[str] = set()
+    if CHECKPOINT_CSV.exists():
+        prev = pd.read_csv(CHECKPOINT_CSV, encoding="utf-8-sig")
+        done_keywords = set(prev["키워드"].dropna())
+        print(f"[⏩] 이전에 완료된 {len(done_keywords)}개 키워드는 건너뜀 (이어서 진행)")
+    else:
+        with CHECKPOINT_CSV.open("w", newline="", encoding="utf-8-sig") as f:
+            csv.DictWriter(f, fieldnames=FIELDNAMES).writeheader()
+
+    todo_keywords = [k for k in KEYWORDS if k not in done_keywords]
+    print(f"[대상 키워드] 전체 {len(KEYWORDS)}개 중 이번에 {len(todo_keywords)}개\n")
+
     driver = build_driver()
     login(driver)
 
-    print(f"[대상 키워드] {len(KEYWORDS)}개\n")
+    try:
+        with CHECKPOINT_CSV.open("a", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
 
-    rows: list[dict] = []
-    for keyword in KEYWORDS:
-        print(f"[검색] {keyword}")
-        try:
-            links = collect_links_for_keyword(driver, keyword)
-        except Exception as e:
-            print(f"  ! 검색 실패: {e}")
-            time.sleep(SLEEP_BETWEEN_KEYWORDS_SEC)
-            continue
+            for keyword in todo_keywords:
+                print(f"[검색] {keyword}")
+                try:
+                    links = collect_links_for_keyword(driver, keyword)
+                except Exception as e:
+                    print(f"  ! 검색 실패: {e}")
+                    time.sleep(SLEEP_BETWEEN_KEYWORDS_SEC)
+                    continue
 
-        print(f"  -> {len(links)}건")
-        for url in links:
-            rows.append({"키워드": keyword, "채널": "인스타그램", "URL": url})
-        time.sleep(SLEEP_BETWEEN_KEYWORDS_SEC)
+                print(f"  -> {len(links)}건")
+                for url in links:
+                    writer.writerow({"키워드": keyword, "채널": "인스타그램", "URL": url})
+                f.flush()  # 중단돼도 방금 쓴 키워드까지는 파일에 남도록 즉시 반영
+                time.sleep(SLEEP_BETWEEN_KEYWORDS_SEC)
+    except KeyboardInterrupt:
+        print("\n[⏸️] 사용자 중단 감지. 지금까지 저장된 내용으로 마무리합니다.")
+    finally:
+        driver.quit()
 
-    driver.quit()
-
-    if rows:
-        df = pd.DataFrame(rows, columns=FIELDNAMES).drop_duplicates(subset="URL")
+    if CHECKPOINT_CSV.exists():
+        df = pd.read_csv(CHECKPOINT_CSV, encoding="utf-8-sig").drop_duplicates(subset="URL")
         df.to_csv(OUTPUT_CSV, index=False, encoding="utf-8-sig")
         print(f"\n[완료] {len(df)}건 저장 -> {OUTPUT_CSV.resolve()}")
     else:

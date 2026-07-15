@@ -17,6 +17,12 @@
     작성일, 좋아요수, 댓글수를 추출하고 START_DATE~END_DATE 기간에 작성된
     게시물만 OUTPUT_XLSX 에 저장한다.
 
+    URL 수가 많으면 시간이 오래 걸리므로, 처리할 때마다 CHECKPOINT_CSV 에
+    바로 append해 중간에 중단돼도 그동안 수집한 데이터는 보존된다.
+    스크립트를 다시 실행하면 CHECKPOINT_CSV 에 이미 있는 URL은 건너뛰고
+    이어서 진행한다. Ctrl+C로 중단해도 그때까지 저장된 내용으로 OUTPUT_XLSX
+    를 만든다.
+
 주의 (선택자 관련):
     좋아요수/댓글수/본문은 우선 og:description 메타태그("123 likes, 4
     comments - ... : caption")를 파싱해서 얻고, 실패하면 페이지 DOM에서
@@ -26,6 +32,7 @@
 
 from __future__ import annotations
 
+import csv
 import os
 import re
 import time
@@ -45,7 +52,10 @@ USERNAME = os.getenv("INSTAGRAM_USERNAME", "").strip()
 PASSWORD = os.getenv("INSTAGRAM_PASSWORD", "").strip()
 
 INPUT_CSV = "instagram_links.csv"
+CHECKPOINT_CSV = "instagram_detail_202604_202606_checkpoint.csv"
 OUTPUT_XLSX = "instagram_detail_202604_202606.xlsx"
+
+FIELDNAMES = ["키워드", "채널", "본문", "작성일", "좋아요수", "댓글수", "URL"]
 
 # 수집 기간 (게시물 작성일 기준)
 START_DATE = "2026-04-01"
@@ -219,40 +229,59 @@ def main() -> None:
         return
 
     df = pd.read_csv(input_path, encoding="utf-8-sig")
-    print(f"[📋] 크롤링할 URL {len(df)}개")
+    print(f"[📋] 전체 URL {len(df)}개")
+
+    checkpoint_path = Path(CHECKPOINT_CSV)
+    done_urls: set[str] = set()
+    if checkpoint_path.exists():
+        prev = pd.read_csv(checkpoint_path, encoding="utf-8-sig")
+        done_urls = set(prev["URL"].dropna())
+        print(f"[⏩] 이전에 저장된 {len(done_urls)}건은 건너뜀 (이어서 진행)")
+    else:
+        with checkpoint_path.open("w", newline="", encoding="utf-8-sig") as f:
+            csv.DictWriter(f, fieldnames=FIELDNAMES).writeheader()
+
+    todo = df[~df["URL"].isin(done_urls)]
+    print(f"[📋] 이번에 크롤링할 URL {len(todo)}개\n")
 
     driver = build_driver()
     login(driver)
 
-    results = []
-    for idx, row in df.iterrows():
-        url = row["URL"]
-        print(f"\n[{idx + 1}/{len(df)}] {url}")
-        try:
-            detail = crawl_post(driver, url)
-        except Exception as e:
-            print(f"  ! 크롤링 실패: {e}")
-            detail = {"본문": f"크롤링 실패: {e}", "작성일": "", "좋아요수": "", "댓글수": ""}
+    try:
+        with checkpoint_path.open("a", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
 
-        results.append({
-            "키워드": row.get("키워드", ""),
-            "채널": row.get("채널", "인스타그램"),
-            "본문": detail["본문"],
-            "작성일": detail["작성일"],
-            "좋아요수": detail["좋아요수"],
-            "댓글수": detail["댓글수"],
-            "URL": url,
-        })
-        time.sleep(random_sleep())
+            for idx, row in todo.iterrows():
+                url = row["URL"]
+                print(f"\n[{idx + 1}/{len(df)}] {url}")
+                try:
+                    detail = crawl_post(driver, url)
+                except Exception as e:
+                    print(f"  ! 크롤링 실패: {e}")
+                    detail = {"본문": f"크롤링 실패: {e}", "작성일": "", "좋아요수": "", "댓글수": ""}
 
-    driver.quit()
+                writer.writerow({
+                    "키워드": row.get("키워드", ""),
+                    "채널": row.get("채널", "인스타그램"),
+                    "본문": detail["본문"],
+                    "작성일": detail["작성일"],
+                    "좋아요수": detail["좋아요수"],
+                    "댓글수": detail["댓글수"],
+                    "URL": url,
+                })
+                f.flush()  # 중단돼도 방금 쓴 줄까지는 파일에 남도록 즉시 반영
+                time.sleep(random_sleep())
+    except KeyboardInterrupt:
+        print("\n[⏸️] 사용자 중단 감지. 지금까지 저장된 내용으로 마무리합니다.")
+    finally:
+        driver.quit()
 
-    out_df = pd.DataFrame(results, columns=["키워드", "채널", "본문", "작성일", "좋아요수", "댓글수", "URL"])
+    out_df = pd.read_csv(checkpoint_path, encoding="utf-8-sig")
 
     # 기간 필터링 (날짜를 추출하지 못한 행은 값 확인이 필요하므로 남겨둔다)
-    dates = out_df["작성일"].str.slice(0, 10)
+    dates = out_df["작성일"].astype(str).str.slice(0, 10)
     in_range = dates.between(START_DATE, END_DATE)
-    no_date = out_df["작성일"] == ""
+    no_date = out_df["작성일"].isna() | (out_df["작성일"] == "")
     filtered_df = out_df[in_range | no_date]
 
     filtered_df.to_excel(OUTPUT_XLSX, index=False)
