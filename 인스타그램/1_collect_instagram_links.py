@@ -24,8 +24,11 @@
       강해서, 특히 새로운 IP(서버/클라우드 환경)에서는 로그인 자체가
       막힐 수 있다. 그 경우 로컬 PC의 일반 브라우저로 먼저 로그인해본
       뒤 재시도하거나, 세션 쿠키를 재사용하는 방식으로 바꿔야 한다.
-    - 해시태그 피드는 "인기 게시물"과 "최근 게시물"이 섞여 있어 완벽한
-      최신순 정렬이 보장되지 않는다. 기간 필터링은 2번 스크립트에서
+    - 해시태그 피드는 "인기 게시물"과 "최근 게시물"이 섞여 있다. 페이지에서
+      "최근 게시물"/"Recent posts" 헤더를 찾을 수 있으면 그 이후에 나오는
+      링크만 수집해 인기 게시물 그리드를 최대한 배제하지만(collect_post_links),
+      헤더를 못 찾으면 페이지 전체 링크 수집으로 폴백하며, 이 방식도 완벽한
+      최신순 정렬을 보장하진 않는다. 정확한 기간 필터링은 2번 스크립트에서
       게시물 작성일을 확인한 뒤에 적용한다.
     - 요청이 많으면 계정이 일시적으로 차단(액션 블록)될 수 있으니
       SLEEP_BETWEEN_KEYWORDS_SEC 값을 늘려서 재시도할 것.
@@ -233,6 +236,35 @@ def login(drv) -> None:
         print("ℹ️ 팝업 없음")
 
 
+# 해시태그 페이지의 '인기 게시물' 그리드를 건너뛰고 '최근 게시물' 섹션 이후의
+# 게시물만 모으기 위한 헤더 탐색용 XPath (한국어/영어 UI 모두 대응)
+RECENT_HEADING_XPATH = (
+    '//*[self::h2 or self::span or self::div]'
+    '[contains(text(), "최근 게시물") or contains(text(), "Recent posts")]'
+)
+
+
+def collect_post_links(drv) -> set[str]:
+    """'최근 게시물' 헤더를 찾으면 그 이후 링크만, 못 찾으면 페이지 전체 링크를 수집한다."""
+    try:
+        heading = drv.find_element(By.XPATH, RECENT_HEADING_XPATH)
+        if heading:
+            recent_links = drv.find_elements(
+                By.XPATH,
+                RECENT_HEADING_XPATH + '/following::a[contains(@href, "/p/")]',
+            )
+            if recent_links:
+                return {href for a in recent_links if (href := a.get_attribute("href"))}
+    except Exception:
+        pass
+
+    return {
+        href
+        for a in drv.find_elements(By.XPATH, '//a[contains(@href, "/p/")]')
+        if (href := a.get_attribute("href"))
+    }
+
+
 def collect_links_for_keyword(drv, keyword: str) -> list[str]:
     # 인스타그램 해시태그는 공백을 허용하지 않으므로 태그에서는 공백을 제거한다
     # (결과 CSV의 '키워드' 컬럼에는 원래 관광지점명을 그대로 남긴다)
@@ -259,10 +291,7 @@ def collect_links_for_keyword(drv, keyword: str) -> list[str]:
         drv.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         time.sleep(SCROLL_PAUSE_SEC)
 
-        for elem in drv.find_elements(By.XPATH, '//a[contains(@href, "/p/")]'):
-            href = elem.get_attribute("href")
-            if href:
-                links.add(href)
+        links.update(collect_post_links(drv))
 
         curr_count = len(links)
         if curr_count == prev_count:
