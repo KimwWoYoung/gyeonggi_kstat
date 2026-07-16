@@ -16,14 +16,19 @@ test_single_url.py
 """
 
 import os
+import re
 import time
 
+import pandas as pd
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
+
+TARGET_REVIEWS = 50  # 테스트용으로 적당히. 실제 파이프라인은 200개.
+OUTPUT_CSV = "test_single_url_reviews.csv"
 
 URL = (
     "https://www.google.com/maps/place/%EA%B5%AC%EB%A6%84%EC%82%B0+%EC%82%B0%EB%A6%BC%EC%9A%95%EC%9E%A5/"
@@ -44,6 +49,13 @@ options.add_argument("--start-maximized")
 options.add_argument("--disable-blink-features=AutomationControlled")
 options.add_experimental_option("excludeSwitches", ["enable-automation"])
 options.add_experimental_option("useAutomationExtension", False)
+
+# GPU 가속 관련 크래시("GPU state invalid after WaitForGetOffsetInRange") 방지.
+# 원격데스크톱/가상머신 환경에서 크롬 GPU 프로세스가 죽으면서 창이 통째로
+# 꺼지는 문제 대응.
+options.add_argument("--disable-gpu")
+options.add_argument("--disable-software-rasterizer")
+options.add_argument("--disable-dev-shm-usage")
 
 if USE_GUEST_MODE:
     options.add_argument("--guest")
@@ -128,14 +140,92 @@ if review_button_clicked:
     except Exception as e:
         print("[⚠️] 정렬(최신순) 변경 실패:", e)
 
+    reviews_data = []
     try:
         review_container = driver.find_element(By.CSS_SELECTOR, "div.m6QErb.DxyBCb.kA9KIf.dS8AEf")
-        items = review_container.find_elements(By.XPATH, ".//div/div/div[4]")
-        print(f"✅ 리뷰 컨테이너 찾음, 현재 로드된 리뷰 항목 수: {len(items)}")
-    except Exception as e:
-        print("[❌] 리뷰 컨테이너 못 찾음:", e)
+        print("✅ 리뷰 컨테이너 찾음")
 
-print("\n[안내] 지금 뜬 크롬 창을 직접 보면서 실제 화면 상태(리뷰 패널 열렸는지, 정렬 메뉴 모양 등)를 확인해보세요.")
-input("확인 다 했으면 Enter 키를 눌러 브라우저를 종료합니다...")
-driver.quit()
+        # 스크롤해서 리뷰 더 로드
+        prev_count = len(review_container.find_elements(By.XPATH, ".//div/div/div[4]"))
+        print(f"[📜] 초기 리뷰 개수: {prev_count}")
+        no_change_count = 0
+        for i in range(15):
+            if prev_count >= TARGET_REVIEWS:
+                break
+            driver.execute_script(
+                "arguments[0].scrollTop = arguments[0].scrollHeight", review_container
+            )
+            time.sleep(2)
+            curr_count = len(review_container.find_elements(By.XPATH, ".//div/div/div[4]"))
+            if curr_count > prev_count:
+                print(f"  스크롤 {i + 1}회 - {prev_count} → {curr_count}")
+                prev_count = curr_count
+                no_change_count = 0
+            else:
+                no_change_count += 1
+                if no_change_count >= 3:
+                    print("  연속 3회 변화 없음. 스크롤 종료.")
+                    break
+
+        review_items = review_container.find_elements(By.XPATH, ".//div/div/div[4]")
+        review_items = list(dict.fromkeys(review_items))
+        print(f"[📝] 최종 리뷰 항목 수: {len(review_items)}")
+
+        for i, review_item in enumerate(review_items):
+            review_rating = ""
+            try:
+                rating_elem = review_item.find_element(By.CSS_SELECTOR, "span.kvMYJc")
+                review_rating = rating_elem.get_attribute("aria-label") or ""
+                numbers = re.findall(r"\d+", review_rating)
+                if numbers:
+                    review_rating = numbers[0]
+            except Exception:
+                pass
+
+            review_date = ""
+            try:
+                review_date = review_item.find_element(By.XPATH, "./div[1]/span[2]").text.strip()
+            except Exception:
+                pass
+
+            review_text = ""
+            for selector in [
+                lambda: review_item.find_element(By.XPATH, "./div[2]/div/span[1]").text.strip(),
+                lambda: review_item.find_element(By.CSS_SELECTOR, "span.wi17pd").text.strip(),
+            ]:
+                try:
+                    review_text = selector()
+                    if review_text:
+                        break
+                except Exception:
+                    continue
+
+            if review_rating or review_text:
+                reviews_data.append({
+                    "ID": i + 1,
+                    "별점": review_rating,
+                    "기간": review_date,
+                    "리뷰": review_text,
+                })
+
+        print(f"[✅] 본문/별점/날짜 추출 완료: {len(reviews_data)}건")
+    except Exception as e:
+        print("[❌] 리뷰 컨테이너/추출 실패:", e)
+
+    if reviews_data:
+        out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), OUTPUT_CSV)
+        pd.DataFrame(reviews_data).to_csv(out_path, index=False, encoding="utf-8-sig")
+        print(f"[💾] {out_path} 저장 완료")
+        for r in reviews_data[:5]:
+            print(f"  - [{r['별점']}점/{r['기간']}] {r['리뷰'][:40]}")
+
+try:
+    input("\n확인 다 했으면 Enter 키를 눌러 브라우저를 종료합니다 (크롬이 이미 꺼졌다면 그냥 Enter)...")
+except Exception:
+    pass
+finally:
+    try:
+        driver.quit()
+    except Exception:
+        pass
 print("[종료]")
