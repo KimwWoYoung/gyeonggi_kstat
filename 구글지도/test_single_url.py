@@ -31,15 +31,40 @@ URL = (
     "!9m1!1b1!16s%2Fg%2F11j42ts73z?entry=ttu&g_ep=EgoyMDI2MDcxMy4wIKXMDSoASAFQAw%3D%3D"
 )
 
+# prefs로 로그인 차단해도 계속 2단계 인증이 뜨면(조직 정책이 강제 로그인일 경우)
+# True로 바꿔서 --guest 모드로 시도해보세요. 게스트 모드는 아예 계정을 붙일 수
+# 없는 프로필이라 강제 로그인 정책도 대부분 우회됨. 단, --user-data-dir과 같이
+# 못 쓰기 때문에 이 경우 프로필 경로는 무시된다.
+USE_GUEST_MODE = False
+
 CHROME_USER_DATA_DIR = os.path.expanduser(os.path.join("~", "selenium_profile_test_single"))
 
 options = webdriver.ChromeOptions()
 options.add_argument("--start-maximized")
-options.add_argument(f"--user-data-dir={CHROME_USER_DATA_DIR}")
-options.add_argument("--profile-directory=Default")
 options.add_argument("--disable-blink-features=AutomationControlled")
 options.add_experimental_option("excludeSwitches", ["enable-automation"])
 options.add_experimental_option("useAutomationExtension", False)
+
+if USE_GUEST_MODE:
+    options.add_argument("--guest")
+else:
+    options.add_argument(f"--user-data-dir={CHROME_USER_DATA_DIR}")
+    options.add_argument("--profile-directory=Default")
+
+    # 이 프로필이 조직 계정 등으로 자동 로그인/동기화되는 것을 최대한 막는다.
+    # (로그인된 상태에서 자동화 브라우저로 접속하면 구글이 "의심스러운 로그인"으로
+    # 판단해 2단계 인증을 띄우는 경우가 있음 — 리뷰는 로그인 없이도 볼 수 있으므로
+    # 애초에 로그인 자체가 안 일어나게 하는 게 목적)
+    options.add_argument("--disable-sync")
+    options.add_argument("--disable-features=SigninInterceptBubble,ChromeSigninInterceptWelcome")
+    options.add_experimental_option(
+        "prefs",
+        {
+            "credentials_enable_service": False,
+            "signin.allowed_on_next_startup": False,
+            "profile.password_manager_enabled": False,
+        },
+    )
 
 driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 driver.set_page_load_timeout(30)
