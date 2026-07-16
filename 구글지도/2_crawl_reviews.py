@@ -47,6 +47,27 @@ def parse_relative_date_kr(text: str, reference: datetime) -> "datetime | None":
     return None
 
 
+def sort_reviews_by_recent(drv, wait: WebDriverWait) -> bool:
+    """리뷰 정렬을 기본값(관련성순)에서 '최신순'으로 바꾼다. 실패하면 기본 정렬로 진행한다."""
+    try:
+        sort_button = wait.until(
+            EC.element_to_be_clickable((By.XPATH, '//button[contains(@aria-label, "정렬")]'))
+        )
+        drv.execute_script("arguments[0].click();", sort_button)
+        time.sleep(1)
+
+        recent_option = WebDriverWait(drv, 5).until(
+            EC.element_to_be_clickable((By.XPATH, '//div[@role="menuitemradio"][contains(., "최신순")]'))
+        )
+        drv.execute_script("arguments[0].click();", recent_option)
+        time.sleep(2)
+        print("✅ 리뷰 정렬: 최신순으로 변경")
+        return True
+    except Exception as e:
+        print(f"[⚠️] 리뷰 정렬(최신순) 변경 실패, 기본 정렬(관련성순)로 진행: {e}")
+        return False
+
+
 # 브라우저 설정
 options = webdriver.ChromeOptions()
 options.add_argument("--start-maximized")
@@ -167,6 +188,7 @@ for idx, row in df.iterrows():
                         time.sleep(1)
                     except:
                         pass
+                    sort_reviews_by_recent(driver, wait)
                 else:
                     print("[⚠️] 리뷰 버튼 클릭 실패")
                     time.sleep(2)
