@@ -347,7 +347,7 @@ def main():
         reference_now = datetime.now()
         estimated = final_reviews_df["기간"].apply(lambda t: parse_relative_date_kr(t, reference_now))
         final_reviews_df = final_reviews_df.copy()
-        final_reviews_df["추정날짜"] = estimated.apply(lambda d: d.strftime("%Y-%m-%d") if d else "")
+        final_reviews_df["추정날짜"] = estimated.apply(lambda d: d.strftime("%Y-%m-%d") if pd.notna(d) else "")
         in_range = final_reviews_df["추정날짜"].between(START_DATE, END_DATE)
         no_date = final_reviews_df["추정날짜"] == ""
         filtered_reviews_df = final_reviews_df[in_range | no_date]
