@@ -17,6 +17,15 @@
     작성일, 좋아요수, 댓글수를 추출하고 START_DATE~END_DATE 기간에 작성된
     게시물만 OUTPUT_XLSX 에 저장한다.
 
+중간저장 / 이어하기:
+    게시물 하나를 처리할 때마다 결과를 CHECKPOINT_CSV(기본
+    instagram_detail_checkpoint.csv)에 즉시 한 줄씩 append 한다. 중간에
+    프로그램이 종료되어도 그때까지의 결과는 CHECKPOINT_CSV에 남아있다.
+    스크립트를 다시 실행하면 CHECKPOINT_CSV에 이미 있는 URL은 건너뛰고
+    남은 URL만 이어서 처리한다. 처음부터 다시 돌리려면 CHECKPOINT_CSV
+    파일을 삭제하고 실행하면 된다. OUTPUT_XLSX는 매 실행 종료 시점의
+    CHECKPOINT_CSV 전체 내용으로 다시 생성된다.
+
 주의 (선택자 관련):
     좋아요수/댓글수/본문은 우선 og:description 메타태그("123 likes, 4
     comments - ... : caption")를 파싱해서 얻고, 실패하면 페이지 DOM에서
@@ -46,10 +55,13 @@ PASSWORD = os.getenv("INSTAGRAM_PASSWORD", "").strip()
 
 INPUT_CSV = "instagram_links.csv"
 OUTPUT_XLSX = "instagram_detail_202604_202606.xlsx"
+CHECKPOINT_CSV = Path("instagram_detail_checkpoint.csv")
 
 # 수집 기간 (게시물 작성일 기준)
 START_DATE = "2026-04-01"
 END_DATE = "2026-06-30"
+
+RESULT_COLUMNS = ["키워드", "채널", "본문", "작성일", "좋아요수", "댓글수", "URL"]
 
 SLEEP_BETWEEN_POSTS_SEC = (2.5, 4.5)
 
@@ -170,6 +182,30 @@ def login(drv) -> None:
         print("ℹ️ 팝업 없음")
 
 
+def load_checkpoint() -> pd.DataFrame:
+    if CHECKPOINT_CSV.exists():
+        return pd.read_csv(CHECKPOINT_CSV, encoding="utf-8-sig", dtype=str)
+    return pd.DataFrame(columns=RESULT_COLUMNS)
+
+
+def append_checkpoint(row: dict) -> None:
+    write_header = not CHECKPOINT_CSV.exists()
+    pd.DataFrame([row], columns=RESULT_COLUMNS).to_csv(
+        CHECKPOINT_CSV, mode="a", index=False, header=write_header, encoding="utf-8-sig"
+    )
+
+
+def save_filtered_xlsx(all_df: pd.DataFrame) -> None:
+    dates = all_df["작성일"].fillna("").str.slice(0, 10)
+    in_range = dates.between(START_DATE, END_DATE)
+    no_date = all_df["작성일"].fillna("") == ""
+    filtered_df = all_df[in_range | no_date]
+
+    filtered_df.to_excel(OUTPUT_XLSX, index=False)
+    print(f"\n[저장] {len(filtered_df)}건 -> {Path(OUTPUT_XLSX).resolve()}")
+    print(f"  (기간 밖 {len(all_df) - len(filtered_df)}건 제외, 날짜 미확인 행은 포함됨)")
+
+
 def crawl_post(drv, url: str) -> dict:
     drv.get(url)
     time.sleep(3)
@@ -219,45 +255,47 @@ def main() -> None:
         return
 
     df = pd.read_csv(input_path, encoding="utf-8-sig")
-    print(f"[📋] 크롤링할 URL {len(df)}개")
+    checkpoint_df = load_checkpoint()
+    done_urls = set(checkpoint_df["URL"]) if not checkpoint_df.empty else set()
+    remaining = df[~df["URL"].isin(done_urls)]
 
-    driver = build_driver()
-    login(driver)
+    print(f"[📋] 전체 {len(df)}개 중 처리 완료 {len(done_urls)}개, 남은 {len(remaining)}개")
+    if CHECKPOINT_CSV.exists():
+        print(f"  (이어하기: {CHECKPOINT_CSV.resolve()} 에서 이어서 처리합니다)")
 
-    results = []
-    for idx, row in df.iterrows():
-        url = row["URL"]
-        print(f"\n[{idx + 1}/{len(df)}] {url}")
+    if remaining.empty:
+        print("[완료] 남은 URL이 없습니다. 체크포인트로 최종 파일만 다시 생성합니다.")
+    else:
+        driver = build_driver()
+        login(driver)
+
         try:
-            detail = crawl_post(driver, url)
-        except Exception as e:
-            print(f"  ! 크롤링 실패: {e}")
-            detail = {"본문": f"크롤링 실패: {e}", "작성일": "", "좋아요수": "", "댓글수": ""}
+            for i, (idx, row) in enumerate(remaining.iterrows()):
+                url = row["URL"]
+                print(f"\n[{len(done_urls) + i + 1}/{len(df)}] {url}")
+                try:
+                    detail = crawl_post(driver, url)
+                except Exception as e:
+                    print(f"  ! 크롤링 실패: {e}")
+                    detail = {"본문": f"크롤링 실패: {e}", "작성일": "", "좋아요수": "", "댓글수": ""}
 
-        results.append({
-            "키워드": row.get("키워드", ""),
-            "채널": row.get("채널", "인스타그램"),
-            "본문": detail["본문"],
-            "작성일": detail["작성일"],
-            "좋아요수": detail["좋아요수"],
-            "댓글수": detail["댓글수"],
-            "URL": url,
-        })
-        time.sleep(random_sleep())
+                result_row = {
+                    "키워드": row.get("키워드", ""),
+                    "채널": row.get("채널", "인스타그램"),
+                    "본문": detail["본문"],
+                    "작성일": detail["작성일"],
+                    "좋아요수": detail["좋아요수"],
+                    "댓글수": detail["댓글수"],
+                    "URL": url,
+                }
+                append_checkpoint(result_row)
+                time.sleep(random_sleep())
+        finally:
+            driver.quit()
 
-    driver.quit()
-
-    out_df = pd.DataFrame(results, columns=["키워드", "채널", "본문", "작성일", "좋아요수", "댓글수", "URL"])
-
-    # 기간 필터링 (날짜를 추출하지 못한 행은 값 확인이 필요하므로 남겨둔다)
-    dates = out_df["작성일"].str.slice(0, 10)
-    in_range = dates.between(START_DATE, END_DATE)
-    no_date = out_df["작성일"] == ""
-    filtered_df = out_df[in_range | no_date]
-
-    filtered_df.to_excel(OUTPUT_XLSX, index=False)
-    print(f"\n[완료] {len(filtered_df)}건 저장 -> {Path(OUTPUT_XLSX).resolve()}")
-    print(f"  (기간 밖 {len(out_df) - len(filtered_df)}건 제외, 날짜 미확인 행은 포함됨)")
+    # 체크포인트(지금까지 처리된 전체 결과, 이번 실행분 포함)를 기준으로 최종 파일 생성
+    all_df = load_checkpoint()
+    save_filtered_xlsx(all_df)
 
 
 def random_sleep() -> float:
