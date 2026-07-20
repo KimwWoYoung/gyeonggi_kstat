@@ -6,9 +6,11 @@ test_single_url.py에서 검증된 방식(로그인 자동 차단 옵션 + GPU �
 
 입력:
     google_maps_urls_gyeonggi.csv (장소명/지역/URL/키워드)
-    맨 첫 번째 행(구름산산림욕장)은 test_single_url.py로 이미 확인했으므로
-    기본적으로 건너뛴다 (SKIP_FIRST_N 으로 조절 가능).
-    URL이 비어있는 행(구글지도에서 장소를 찾지 못한 경우)은 자동으로 건너뛴다.
+    앞의 26곳(구름산산림욕장~경기도어린이박물관)은 이미 수집을 마쳤으므로
+    기본적으로 건너뛰고 27번째인 양평양떼목장부터 시작한다 (SKIP_FIRST_N
+    으로 조절 가능).
+    URL이 "없음"이거나 비어있는 행(구글지도에서 장소를 찾지 못한 경우)은
+    자동으로 건너뛴다.
 
 중간저장 / 이어하기:
     장소 1곳을 다 처리할 때마다 리뷰 결과를 CHECKPOINT_CSV에 즉시
@@ -39,8 +41,9 @@ INPUT_CSV = os.path.join(SCRIPT_DIR, "google_maps_urls_gyeonggi.csv")
 CHECKPOINT_CSV = os.path.join(SCRIPT_DIR, "batch_test_reviews_checkpoint.csv")
 OUTPUT_XLSX = os.path.join(SCRIPT_DIR, "gyeonggi_reviews_batch_test_202604_202606.xlsx")
 
-# 구름산산림욕장은 test_single_url.py로 이미 확인해서 기본적으로 건너뜀.
-SKIP_FIRST_N = 1
+# 앞의 26곳(구름산산림욕장~경기도어린이박물관)은 이미 수집을 마쳐서 건너뛰고
+# 27번째인 양평양떼목장부터 시작한다.
+SKIP_FIRST_N = 26
 
 TARGET_REVIEWS = 200
 START_DATE = "2026-04-01"
@@ -283,15 +286,19 @@ def main():
 
     df = pd.read_csv(INPUT_CSV, encoding="utf-8-sig", keep_default_na=False)
 
-    no_url_count = (df["URL"].str.strip() == "").sum()
-    if no_url_count:
-        print(f"[ℹ️] URL이 없는 {no_url_count}곳은 건너뜁니다: "
-              f"{df.loc[df['URL'].str.strip() == '', '장소명'].tolist()}")
-        df = df[df["URL"].str.strip() != ""].reset_index(drop=True)
-
+    # 원본 순서(1~26번째 = 이미 완료) 기준으로 먼저 자르고, 그다음 URL 없는 행을
+    # 걸러낸다. 순서를 바꾸면 앞쪽에 섞여있는 "없음" 행 때문에 SKIP_FIRST_N이
+    # 어긋난다.
     if SKIP_FIRST_N:
         print(f"[ℹ️] 앞의 {SKIP_FIRST_N}개는 건너뜁니다: {df['장소명'].head(SKIP_FIRST_N).tolist()}")
         df = df.iloc[SKIP_FIRST_N:].reset_index(drop=True)
+
+    has_url = df["URL"].str.strip().str.startswith("http")
+    no_url_count = (~has_url).sum()
+    if no_url_count:
+        print(f"[ℹ️] URL이 없는(\"없음\" 등) {no_url_count}곳은 건너뜁니다: "
+              f"{df.loc[~has_url, '장소명'].tolist()}")
+        df = df[has_url].reset_index(drop=True)
 
     checkpoint_df = load_checkpoint()
     done_urls = set(checkpoint_df["URL"]) if not checkpoint_df.empty else set()
