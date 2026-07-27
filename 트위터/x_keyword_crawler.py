@@ -103,7 +103,11 @@ END_DATE = "2026-06-30T23:59:59Z"
 
 TWEETS_PER_KEYWORD = 50
 SLEEP_BETWEEN_CALLS_SEC = 2.0
-OUTPUT_CSV = Path("x_posts_202604_202606.csv")
+
+# 테스트 모드: True면 KEYWORDS의 첫 번째 키워드만 수집한다.
+# 전체 키워드로 돌리려면 False로 바꿀 것.
+TEST_MODE = True
+OUTPUT_CSV = Path("x_posts_test.csv" if TEST_MODE else "x_posts_202604_202606.csv")
 
 
 def fetch_tweets(keyword: str, count: int) -> list[dict]:
@@ -179,14 +183,16 @@ def main() -> None:
         print("[오류] 환경변수 TWITTER_BEARER_TOKEN을 설정해주세요.")
         return
 
-    print("[X(트위터) 키워드 크롤링 시작]")
+    target_keywords = KEYWORDS[:1] if TEST_MODE else KEYWORDS
+
+    print("[X(트위터) 키워드 크롤링 시작]" + (" (테스트 모드)" if TEST_MODE else ""))
     print(f"[수집 기간] {START_DATE} ~ {END_DATE}")
-    print(f"[대상 키워드] {len(KEYWORDS)}개\n")
+    print(f"[대상 키워드] {len(target_keywords)}개\n")
 
     start = time.time()
     rows: list[dict] = []
 
-    for keyword in KEYWORDS:
+    for keyword in target_keywords:
         print(f"  [검색] {keyword}")
         try:
             found = fetch_tweets(keyword, TWEETS_PER_KEYWORD)
