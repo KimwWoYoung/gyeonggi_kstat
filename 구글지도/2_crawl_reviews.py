@@ -144,6 +144,19 @@ def append_checkpoint(rows: list[dict]) -> None:
     )
 
 
+def close_login_promo_popup(drv) -> None:
+    """게스트 모드에서 뜨는 '로그인하여 Google 지도를 최대한 활용하세요' 홍보 팝업을 닫는다.
+    로그인 없이도 리뷰 조회에는 지장 없지만, 팝업이 떠있으면 뒤쪽 버튼 클릭이 막힌다."""
+    try:
+        close_button = WebDriverWait(drv, 3).until(
+            EC.element_to_be_clickable((By.XPATH, '//button[contains(., "닫기")]'))
+        )
+        drv.execute_script("arguments[0].click();", close_button)
+        print("✅ 로그인 홍보 팝업 닫기")
+    except Exception:
+        pass
+
+
 def crawl_place(drv, wait: WebDriverWait, keyword: str, place_name: str, region: str, url: str):
     """장소 1곳을 크롤링해서 (장소정보 dict, 리뷰 dict 리스트)를 반환한다."""
     print(f"\n{'=' * 60}")
@@ -155,6 +168,8 @@ def crawl_place(drv, wait: WebDriverWait, keyword: str, place_name: str, region:
     except Exception as e:
         print(f"[⚠️] 페이지 로드 타임아웃/오류 (계속 진행): {e}")
     time.sleep(3)
+
+    close_login_promo_popup(drv)
 
     try:
         name = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "h1.DUwDvf"))).text
