@@ -5,3 +5,4 @@ playwright
 yt-dlp
 selenium
 webdriver-manager
+python-dotenv

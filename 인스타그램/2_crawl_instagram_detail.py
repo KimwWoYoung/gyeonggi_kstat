@@ -58,6 +58,7 @@ import time
 from pathlib import Path
 
 import pandas as pd
+from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.chrome.options import Options
@@ -67,6 +68,9 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
+
+# 이 스크립트와 같은 폴더(인스타그램/)에 있는 .env 파일을 읽는다.
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 USERNAME = os.getenv("INSTAGRAM_USERNAME", "").strip()
 PASSWORD = os.getenv("INSTAGRAM_PASSWORD", "").strip()
