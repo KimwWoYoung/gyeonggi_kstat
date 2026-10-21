@@ -65,9 +65,12 @@ END_DATE = "2026-09-30"
 RESULT_COLUMNS = ["키워드", "장소명", "지역", "URL", "ID", "별점", "기간", "리뷰"]
 PLACE_COLUMNS = ["키워드", "지역", "장소명", "주소", "별점", "URL", "리뷰개수"]
 
-# prefs로 로그인 차단해도 계속 2단계 인증이 뜨면(조직 정책이 강제 로그인일 경우)
-# True로 바꿔서 --guest 모드로 시도해보세요.
-USE_GUEST_MODE = True
+# 게스트 모드(로그인 없음)에서는 '로그인하여 Google 지도를 최대한
+# 활용하세요' 팝업이 계속 다시 떠서 정렬 메뉴를 가리는 문제가 있었다.
+# 로그인해두면 이 팝업 자체가 안 뜬다. prefs로 로그인 차단해도 계속
+# 2단계 인증이 뜨면(조직 정책이 강제 로그인일 경우) True로 바꿔서
+# --guest 모드로 다시 시도해보세요.
+USE_GUEST_MODE = False
 CHROME_USER_DATA_DIR = os.path.expanduser(os.path.join("~", "selenium_profile_test_single"))
 
 
