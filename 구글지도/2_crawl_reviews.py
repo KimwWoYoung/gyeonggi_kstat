@@ -130,7 +130,7 @@ def build_driver():
         options.add_argument(f"--profile-directory={CHROME_PROFILE}")
 
     drv = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-    drv.set_page_load_timeout(30)
+    drv.set_page_load_timeout(60)
     return drv
 
 
