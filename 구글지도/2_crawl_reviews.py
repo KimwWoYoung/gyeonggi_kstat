@@ -61,7 +61,7 @@ PLACE_COLUMNS = ["키워드", "지역", "장소명", "주소", "별점", "URL", 
 
 # prefs로 로그인 차단해도 계속 2단계 인증이 뜨면(조직 정책이 강제 로그인일 경우)
 # True로 바꿔서 --guest 모드로 시도해보세요.
-USE_GUEST_MODE = False
+USE_GUEST_MODE = True
 CHROME_USER_DATA_DIR = os.path.expanduser(os.path.join("~", "selenium_profile_test_single"))
 
 
@@ -318,13 +318,14 @@ def main():
     drv = build_driver()
     wait = WebDriverWait(drv, 15)
 
-    try:
-        drv.get("https://www.google.com/maps")
-    except Exception as e:
-        print(f"[⚠️] 초기 페이지 로드 실패 (계속 진행): {e}")
+    if not USE_GUEST_MODE:
+        try:
+            drv.get("https://www.google.com/maps")
+        except Exception as e:
+            print(f"[⚠️] 초기 페이지 로드 실패 (계속 진행): {e}")
 
-    print("\n[⏸️] 브라우저가 열렸습니다. 로그인/본인확인(인증코드 등)이 필요하면 지금 처리해주세요.")
-    input("    다 되셨으면 Enter를 눌러 크롤링을 시작합니다... ")
+        print("\n[⏸️] 브라우저가 열렸습니다. 로그인/본인확인(인증코드 등)이 필요하면 지금 처리해주세요.")
+        input("    다 되셨으면 Enter를 눌러 크롤링을 시작합니다... ")
 
     all_place_rows = []
 
