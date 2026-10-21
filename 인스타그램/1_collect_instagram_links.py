@@ -4,13 +4,16 @@
 설치:
     pip install selenium webdriver-manager pandas
 
-환경변수:
-    INSTAGRAM_USERNAME
-    INSTAGRAM_PASSWORD
+로그인:
+    아이디/비밀번호를 스크립트가 자동으로 입력하지 않는다. 대신 전용
+    크롬 프로필(CHROME_USER_DATA_DIR)로 브라우저를 띄운 뒤, 사람이
+    직접 로그인(및 체크포인트/2단계 인증)을 끝낼 때까지 기다린다. 이
+    프로필은 디스크에 남아있으므로, 한 번 로그인해두면 다음 실행부터는
+    로그인 세션이 유지돼 인증코드를 다시 받을 필요가 없다. (자동화
+    로그인을 매번 새로 시도하면 인스타그램이 매번 새 기기로 인식해
+    인증코드를 반복 요구하는 문제가 있었다.)
 
 사용법:
-    export INSTAGRAM_USERNAME="..."
-    export INSTAGRAM_PASSWORD="..."
     python 1_collect_instagram_links.py
 
 동작:
@@ -41,18 +44,13 @@ import time
 from pathlib import Path
 
 import pandas as pd
-from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
-
-# 이 스크립트와 같은 폴더(인스타그램/)에 있는 .env 파일을 읽는다.
-load_dotenv(Path(__file__).resolve().parent / ".env")
 
 KEYWORDS = [
     "구름산산림욕장",
@@ -114,8 +112,9 @@ KEYWORDS = [
     "스타필드수원",
 ]
 
-USERNAME = os.getenv("INSTAGRAM_USERNAME", "").strip()
-PASSWORD = os.getenv("INSTAGRAM_PASSWORD", "").strip()
+# 로그인 세션을 유지하기 위한 전용 크롬 프로필 (없으면 자동 생성됨).
+# 인스타그램/2_crawl_instagram_detail.py와 같은 경로를 써서 로그인 상태를 공유한다.
+CHROME_USER_DATA_DIR = os.path.expanduser(os.path.join("~", "selenium_profile_instagram"))
 
 LINKS_PER_KEYWORD = 300
 SCROLL_PAUSE_SEC = 2.0
@@ -135,6 +134,8 @@ def build_driver() -> webdriver.Chrome:
         "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
     )
+    options.add_argument(f"--user-data-dir={CHROME_USER_DATA_DIR}")
+    options.add_argument("--profile-directory=Default")
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
     driver.execute_cdp_cmd(
         "Page.addScriptToEvaluateOnNewDocument",
@@ -143,94 +144,16 @@ def build_driver() -> webdriver.Chrome:
     return driver
 
 
-def find_login_fields(drv):
-    """여러 방식으로 아이디/비번 입력창을 순서대로 시도. iframe도 확인."""
-    locator_sets = [
-        (By.NAME, "username", By.NAME, "password"),
-        (By.CSS_SELECTOR, 'input[type="text"]', By.CSS_SELECTOR, 'input[type="password"]'),
-        (By.CSS_SELECTOR, 'input[aria-label*="이메일"]', By.CSS_SELECTOR, 'input[aria-label*="비밀번호"]'),
-        (By.XPATH, '//input[@autocomplete="username"]', By.XPATH, '//input[@autocomplete="current-password"]'),
-    ]
-
-    def try_locators():
-        for u_by, u_val, p_by, p_val in locator_sets:
-            try:
-                u = WebDriverWait(drv, 4).until(EC.presence_of_element_located((u_by, u_val)))
-                p = drv.find_element(p_by, p_val)
-                if u.is_displayed():
-                    return u, p
-            except Exception:
-                continue
-        return None, None
-
-    u, p = try_locators()
-    if u is not None:
-        return u, p
-
-    for frame in drv.find_elements(By.TAG_NAME, "iframe"):
-        try:
-            drv.switch_to.frame(frame)
-            u, p = try_locators()
-            if u is not None:
-                return u, p
-            drv.switch_to.default_content()
-        except Exception:
-            drv.switch_to.default_content()
-            continue
-
-    return None, None
-
-
-def type_like_human(drv, element, text: str, field_label: str = "") -> bool:
-    """React 컨트롤 입력창 대응: 클릭 후 한 글자씩 입력하고, 값이 실제로 들어갔는지 검증."""
-    element.click()
-    time.sleep(0.3)
-    element.clear()
-    time.sleep(0.2)
-
-    for ch in text:
-        element.send_keys(ch)
-        time.sleep(0.07)
-
-    time.sleep(0.3)
-    actual = element.get_attribute("value")
-
-    if actual != text:
-        drv.execute_script(
-            """
-            const el = arguments[0];
-            const val = arguments[1];
-            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-            nativeSetter.call(el, val);
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            """,
-            element,
-            text,
-        )
-        time.sleep(0.3)
-        actual = element.get_attribute("value")
-
-    print(f"{'✅' if actual == text else '❌'} {field_label} 입력 확인")
-    return actual == text
-
-
 def login(drv) -> None:
-    drv.get("https://www.instagram.com/accounts/login/")
-    time.sleep(3)
+    """로그인은 자동 입력하지 않고 사람이 직접 한다 (아래 설명 참고)."""
+    drv.get("https://www.instagram.com/")
 
-    username_input, password_input = find_login_fields(drv)
-    if username_input is None:
-        drv.save_screenshot("login_debug.png")
-        raise RuntimeError("로그인 필드를 찾지 못했습니다. login_debug.png 확인하세요.")
+    print("\n[⏸️] 브라우저가 열렸습니다. 이미 로그인돼 있으면 그대로 두시고,"
+          " 아니라면 아이디/비밀번호 입력과 로그인, 이후 체크포인트/2단계 인증까지 직접 처리해주세요.")
+    print("    (이 브라우저는 전용 프로필을 재사용하므로, 한 번 로그인해두면"
+          " 다음 실행부터는 다시 로그인하지 않아도 됩니다)")
+    input("    로그인 상태 확인/완료되면 Enter를 눌러 수집을 시작합니다... ")
 
-    type_like_human(drv, username_input, USERNAME, "아이디")
-    type_like_human(drv, password_input, PASSWORD, "비밀번호")
-    time.sleep(0.5)
-    password_input.send_keys(Keys.ENTER)
-    print("✅ 로그인 시도 완료")
-
-    time.sleep(5)
     try:
         WebDriverWait(drv, 5).until(
             EC.element_to_be_clickable((By.XPATH, "//button[text()='나중에 하기']"))
@@ -310,15 +233,8 @@ def collect_links_for_keyword(drv, keyword: str) -> list[str]:
 
 
 def main() -> None:
-    if not USERNAME or not PASSWORD:
-        print("[오류] 환경변수 INSTAGRAM_USERNAME / INSTAGRAM_PASSWORD 을 설정해주세요.")
-        return
-
     driver = build_driver()
     login(driver)
-
-    print("\n[⏸️] 로그인을 시도했습니다. 인스타그램이 체크포인트/2단계 인증(본인확인) 화면을 띄웠다면 지금 브라우저에서 직접 처리해주세요.")
-    input("    다 되셨으면(또는 해당 화면이 없었으면) Enter를 눌러 수집을 시작합니다... ")
 
     print(f"[대상 키워드] {len(KEYWORDS)}개\n")
 
