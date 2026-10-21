@@ -3,3 +3,7 @@ __pycache__/
 
 # 계정/비밀번호가 담긴 환경변수 파일은 절대 커밋하지 않음
 .env
+
+# 디버깅용 임시 스크린샷
+sort_debug.png
+login_debug.png

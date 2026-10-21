@@ -268,6 +268,10 @@ def crawl_place(drv, wait: WebDriverWait, keyword: str, place_name: str, region:
             sort_button = find_sort_button(drv)
             robust_click(drv, sort_button)
             time.sleep(1)
+            try:
+                drv.save_screenshot(os.path.join(SCRIPT_DIR, "sort_debug.png"))
+            except Exception:
+                pass
             recent_option = find_recent_sort_option(drv)
             robust_click(drv, recent_option)
             time.sleep(2)
@@ -275,6 +279,7 @@ def crawl_place(drv, wait: WebDriverWait, keyword: str, place_name: str, region:
         except Exception as e:
             _reraise_if_session_dead(e)
             print("[⚠️] 정렬(최신순) 변경 실패, 기본 정렬로 진행:", e)
+            print(f"    (sort_debug.png에 정렬 버튼 클릭 직후 화면이 저장됐습니다: {os.path.join(SCRIPT_DIR, 'sort_debug.png')})")
 
         try:
             review_container = drv.find_element(By.CSS_SELECTOR, "div.m6QErb.DxyBCb.kA9KIf.dS8AEf")
