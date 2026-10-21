@@ -72,12 +72,12 @@ USERNAME = os.getenv("INSTAGRAM_USERNAME", "").strip()
 PASSWORD = os.getenv("INSTAGRAM_PASSWORD", "").strip()
 
 INPUT_CSV = "instagram_links.csv"
-OUTPUT_XLSX = "instagram_detail_202604_202606.xlsx"
+OUTPUT_XLSX = "instagram_detail_202607_202609.xlsx"
 CHECKPOINT_CSV = Path("instagram_detail_checkpoint.csv")
 
 # 수집 기간 (게시물 작성일 기준)
-START_DATE = "2026-04-01"
-END_DATE = "2026-06-30"
+START_DATE = "2026-07-01"
+END_DATE = "2026-09-30"
 
 RESULT_COLUMNS = ["키워드", "채널", "본문", "작성일", "좋아요수", "댓글수", "URL"]
 
