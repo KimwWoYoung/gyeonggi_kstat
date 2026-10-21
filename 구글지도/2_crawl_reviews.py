@@ -5,7 +5,11 @@
 
 리뷰 정렬:
     리뷰 탭을 연 뒤 정렬을 '관련성순'(기본값)에서 '최신순'으로 바꾸고
-    나서 스크롤한다. 정렬 변경에 실패하면 기본 정렬로 계속 진행한다.
+    나서 스크롤한다. 먼저 '최신순' 메뉴 항목을 선택자로 찾아 클릭을
+    시도하고, 그게 실패하면 선택자 없이 키보드(아래 방향키 + Enter)로
+    선택하는 방식으로 한 번 더 시도한다. 그래도 실패하면 기본 정렬로
+    계속 진행한다 (디버깅용으로 정렬 버튼 클릭 직후 화면을
+    sort_debug.png에 저장).
 
 중간저장 / 이어하기:
     장소 1곳을 다 처리할 때마다 리뷰 결과를 CHECKPOINT_CSV에 즉시
@@ -34,7 +38,9 @@ import pandas as pd
 from selenium import webdriver
 from selenium.common.exceptions import InvalidSessionIdException, WebDriverException
 from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
@@ -217,6 +223,15 @@ def find_recent_sort_option(drv):
     raise TimeoutError("최신순 옵션을 찾지 못함 (시도한 선택자 전부 실패)")
 
 
+def select_recent_sort_via_keyboard(drv) -> None:
+    """정렬 메뉴가 열려 있다고 가정하고 선택자 없이 키보드로 '최신순'을 고른다.
+    메뉴 항목 순서는 보통 관련성순(기본 선택) -> 최신순 -> 높은 평점순 -> 낮은
+    평점순이므로, 아래 방향키로 한 칸 이동한 뒤 Enter로 선택한다. DOM 구조가
+    달라져도 동작하는 선택자 기반 방법의 폴백이다."""
+    actions = ActionChains(drv)
+    actions.send_keys(Keys.ARROW_DOWN).pause(0.4).send_keys(Keys.ENTER).perform()
+
+
 def crawl_place(drv, wait: WebDriverWait, keyword: str, place_name: str, region: str, url: str):
     """장소 1곳을 크롤링해서 (장소정보 dict, 리뷰 dict 리스트)를 반환한다."""
     print(f"\n{'=' * 60}")
@@ -272,10 +287,16 @@ def crawl_place(drv, wait: WebDriverWait, keyword: str, place_name: str, region:
                 drv.save_screenshot(os.path.join(SCRIPT_DIR, "sort_debug.png"))
             except Exception:
                 pass
-            recent_option = find_recent_sort_option(drv)
-            robust_click(drv, recent_option)
+            try:
+                recent_option = find_recent_sort_option(drv)
+                robust_click(drv, recent_option)
+                print("✅ 정렬: 최신순으로 변경 성공 (선택자)")
+            except Exception as e:
+                _reraise_if_session_dead(e)
+                print("[⚠️] 선택자로 '최신순' 못 찾음, 키보드 방식으로 재시도:", e)
+                select_recent_sort_via_keyboard(drv)
+                print("✅ 정렬: 최신순으로 변경 시도 (키보드)")
             time.sleep(2)
-            print("✅ 정렬: 최신순으로 변경 성공")
         except Exception as e:
             _reraise_if_session_dead(e)
             print("[⚠️] 정렬(최신순) 변경 실패, 기본 정렬로 진행:", e)
