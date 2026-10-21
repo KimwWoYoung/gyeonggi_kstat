@@ -56,6 +56,10 @@ OUTPUT_XLSX = os.path.join(SCRIPT_DIR, "gyeonggi_reviews_202607_202609.xlsx")
 # (체크포인트로 이미 자동 이어하기가 되므로 보통은 0으로 둔다.)
 SKIP_FIRST_N = 0
 
+# 지금 당장은 건너뛰고 나중에 따로 돌릴 키워드 (예: 리뷰가 아주 많아서
+# 오래 걸리는 대형 관광지). 다시 포함하려면 여기서 빼면 된다.
+SKIP_KEYWORDS = {"에버랜드"}
+
 TARGET_REVIEWS = 200
 
 # 수집 기간 (리뷰 작성일 기준)
@@ -412,6 +416,12 @@ def main():
         print(f"[ℹ️] URL이 없는(\"없음\" 등) {no_url_count}곳은 건너뜁니다: "
               f"{df.loc[~has_url, '장소명'].tolist()}")
         df = df[has_url].reset_index(drop=True)
+
+    if SKIP_KEYWORDS:
+        is_skipped = df["키워드"].isin(SKIP_KEYWORDS)
+        if is_skipped.any():
+            print(f"[ℹ️] SKIP_KEYWORDS로 지정돼 지금은 건너뜁니다: {df.loc[is_skipped, '키워드'].tolist()}")
+            df = df[~is_skipped].reset_index(drop=True)
 
     checkpoint_df = load_checkpoint()
     done_urls = set(checkpoint_df["URL"]) if not checkpoint_df.empty else set()
