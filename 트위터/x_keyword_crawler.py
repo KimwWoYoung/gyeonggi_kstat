@@ -13,8 +13,12 @@ X(트위터) 명소명 키워드 검색 크롤러 (공식 API v2 사용, Bearer 
 
 동작:
     KEYWORDS 의 각 명소명으로 전체 아카이브 검색(full-archive search) API를
-    호출해, START_DATE~END_DATE(2026-04-01~2026-06-30) 기간의 리트윗 제외
+    호출해, START_DATE~END_DATE(2026-07-01~2026-09-30) 기간의 리트윗 제외
     트윗을 키워드당 TWEETS_PER_KEYWORD개까지 수집, OUTPUT_CSV 에 저장한다.
+
+    TEST_MODE = True로 두면 KEYWORDS의 첫 번째 키워드만 수집해 API
+    토큰/권한이 제대로 동작하는지 빠르게 확인할 수 있다(결과는 별도
+    x_posts_test.csv에 저장). 전체 수집 시엔 False로 둘 것.
 
 주의:
     - /2/tweets/search/all(전체 아카이브 검색)은 Pro/Enterprise/Academic 등
@@ -98,12 +102,16 @@ BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN", "").strip().strip('"')
 SEARCH_URL = "https://api.twitter.com/2/tweets/search/all"
 
 # 수집 기간 (X API는 RFC3339 형식 요구)
-START_DATE = "2026-04-01T00:00:00Z"
-END_DATE = "2026-06-30T23:59:59Z"
+START_DATE = "2026-07-01T00:00:00Z"
+END_DATE = "2026-09-30T23:59:59Z"
 
 TWEETS_PER_KEYWORD = 50
 SLEEP_BETWEEN_CALLS_SEC = 2.0
-OUTPUT_CSV = Path("x_posts_202604_202606.csv")
+
+# 테스트 모드: True면 KEYWORDS의 첫 번째 키워드만 수집한다.
+# 전체 키워드로 돌리려면 False로 바꿀 것.
+TEST_MODE = False
+OUTPUT_CSV = Path("x_posts_test.csv" if TEST_MODE else "x_posts_202607_202609.csv")
 
 
 def fetch_tweets(keyword: str, count: int) -> list[dict]:
@@ -179,14 +187,16 @@ def main() -> None:
         print("[오류] 환경변수 TWITTER_BEARER_TOKEN을 설정해주세요.")
         return
 
-    print("[X(트위터) 키워드 크롤링 시작]")
+    target_keywords = KEYWORDS[:1] if TEST_MODE else KEYWORDS
+
+    print("[X(트위터) 키워드 크롤링 시작]" + (" (테스트 모드)" if TEST_MODE else ""))
     print(f"[수집 기간] {START_DATE} ~ {END_DATE}")
-    print(f"[대상 키워드] {len(KEYWORDS)}개\n")
+    print(f"[대상 키워드] {len(target_keywords)}개\n")
 
     start = time.time()
     rows: list[dict] = []
 
-    for keyword in KEYWORDS:
+    for keyword in target_keywords:
         print(f"  [검색] {keyword}")
         try:
             found = fetch_tweets(keyword, TWEETS_PER_KEYWORD)
