@@ -318,6 +318,14 @@ def main():
     drv = build_driver()
     wait = WebDriverWait(drv, 15)
 
+    try:
+        drv.get("https://www.google.com/maps")
+    except Exception as e:
+        print(f"[⚠️] 초기 페이지 로드 실패 (계속 진행): {e}")
+
+    print("\n[⏸️] 브라우저가 열렸습니다. 로그인/본인확인(인증코드 등)이 필요하면 지금 처리해주세요.")
+    input("    다 되셨으면 Enter를 눌러 크롤링을 시작합니다... ")
+
     all_place_rows = []
 
     for _, row in remaining.iterrows():
