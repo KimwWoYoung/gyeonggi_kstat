@@ -71,21 +71,11 @@ PLACE_COLUMNS = ["키워드", "지역", "장소명", "주소", "별점", "URL", 
 # 막히는 경우에만 사용).
 USE_GUEST_MODE = False
 
-# 평소 쓰는 크롬에 이미 구글 로그인이 돼있는 프로필을 재사용한다.
-#
-# 주의: 크롬은 보안상 "기본" 사용자 데이터 경로(%LOCALAPPDATA%/Google/
-# Chrome/User Data)에는 자동화(DevTools 원격 제어) 접속을 막아놓았다
-# ("DevTools remote debugging requires a non-default data directory"
-# 에러로 확인됨). 그래서 그 경로를 복사한 사본을 써야 한다:
-#
-#   1) 평소 쓰는 크롬을 완전히 종료
-#   2) PowerShell에서 아래 실행해 사본 생성 (로그인 쿠키까지 그대로 복사됨)
-#      robocopy "$env:LOCALAPPDATA\Google\Chrome\User Data" "$env:USERPROFILE\selenium_chrome_profile" /E /XJ /R:1 /W:1
-#
-# 프로필 폴더명이 "Default"가 아니라면(크롬 프로필을 여러 개 쓰는 경우)
-# 크롬 주소창에 chrome://version 을 쳐서 "프로필 경로"를 확인해 아래
-# CHROME_PROFILE 값을 그 폴더명으로 바꿀 것(예: "Profile 1").
-CHROME_USER_DATA_DIR = os.path.expanduser(os.path.join("~", "selenium_chrome_profile"))
+# 전용 자동화 프로필을 쓴다 (크롬 기본 경로가 아니라서 자동화 접속 차단에
+# 안 걸림). 이 프로필로 처음 한 번만 수동 로그인해두면, 로그인 쿠키가 이
+# 폴더에 저장되므로 다음 실행부터는 로그인 상태가 유지된다. 로그인돼
+# 있으면 '로그인하여 Google 지도를 최대한 활용하세요' 팝업도 안 뜬다.
+CHROME_USER_DATA_DIR = os.path.expanduser(os.path.join("~", "selenium_profile_gmaps"))
 CHROME_PROFILE = "Default"
 
 
