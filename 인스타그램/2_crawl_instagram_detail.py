@@ -357,11 +357,15 @@ def main() -> None:
     if remaining.empty:
         print("[완료] 남은 URL이 없습니다. 체크포인트로 최종 파일만 다시 생성합니다.")
     else:
-        start_watchdog()
-        touch_heartbeat()
-
         driver = build_driver()
         login(driver)
+
+        print("\n[⏸️] 로그인을 시도했습니다. 인스타그램이 체크포인트/2단계 인증(본인확인) 화면을 띄웠다면 지금 브라우저에서 직접 처리해주세요.")
+        input("    다 되셨으면(또는 해당 화면이 없었으면) Enter를 눌러 수집을 시작합니다... ")
+
+        # watchdog은 사람이 수동으로 인증을 처리하는 동안 '멈춤'으로 오판하지
+        # 않도록, 그 대기가 끝난 뒤부터 가동한다.
+        start_watchdog()
         touch_heartbeat()
 
         consecutive_rate_limit = 0

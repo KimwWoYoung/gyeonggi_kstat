@@ -317,6 +317,9 @@ def main() -> None:
     driver = build_driver()
     login(driver)
 
+    print("\n[⏸️] 로그인을 시도했습니다. 인스타그램이 체크포인트/2단계 인증(본인확인) 화면을 띄웠다면 지금 브라우저에서 직접 처리해주세요.")
+    input("    다 되셨으면(또는 해당 화면이 없었으면) Enter를 눌러 수집을 시작합니다... ")
+
     print(f"[대상 키워드] {len(KEYWORDS)}개\n")
 
     rows: list[dict] = []
