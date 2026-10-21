@@ -156,6 +156,17 @@ def _reraise_if_session_dead(e: Exception) -> None:
         raise e
 
 
+def robust_click(drv, element) -> None:
+    """먼저 실제 마우스 클릭(.click())을 시도한다. 구글의 일부 드롭다운/메뉴
+    컴포넌트는 JS로 보내는 합성 click 이벤트만으로는 안 열리고 실제 포인터
+    이벤트가 와야 반응하기 때문이다. 다른 요소에 가려서(intercept) 실패하면
+    그때만 JS 강제 클릭으로 폴백한다."""
+    try:
+        element.click()
+    except Exception:
+        drv.execute_script("arguments[0].click();", element)
+
+
 def close_login_promo_popup(drv) -> None:
     """게스트 모드에서 뜨는 '로그인하여 Google 지도를 최대한 활용하세요' 홍보 팝업을 닫는다.
     로그인 없이도 리뷰 조회에는 지장 없지만, 팝업이 떠있으면 뒤쪽 버튼 클릭이 막힌다."""
@@ -242,7 +253,7 @@ def crawl_place(drv, wait: WebDriverWait, keyword: str, place_name: str, region:
         review_button = wait.until(
             EC.element_to_be_clickable((By.XPATH, '//button[contains(@aria-label, "리뷰")]'))
         )
-        drv.execute_script("arguments[0].click();", review_button)
+        robust_click(drv, review_button)
         review_button_clicked = True
         print("✅ 리뷰 버튼 클릭 성공")
     except Exception as e:
@@ -255,10 +266,10 @@ def crawl_place(drv, wait: WebDriverWait, keyword: str, place_name: str, region:
     if review_button_clicked:
         try:
             sort_button = find_sort_button(drv)
-            drv.execute_script("arguments[0].click();", sort_button)
+            robust_click(drv, sort_button)
             time.sleep(1)
             recent_option = find_recent_sort_option(drv)
-            drv.execute_script("arguments[0].click();", recent_option)
+            robust_click(drv, recent_option)
             time.sleep(2)
             print("✅ 정렬: 최신순으로 변경 성공")
         except Exception as e:
