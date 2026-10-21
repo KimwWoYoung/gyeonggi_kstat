@@ -187,6 +187,25 @@ def find_sort_button(drv):
     raise TimeoutError("정렬 버튼을 찾지 못함 (시도한 선택자 전부 실패)")
 
 
+# "최신순" 메뉴 항목도 role이 예상과 다를 수 있으니 여러 선택자를 순서대로 시도한다.
+RECENT_SORT_OPTION_XPATHS = [
+    '//div[@role="menuitemradio"][contains(., "최신순")]',
+    '//*[@role="menuitemradio"][contains(., "최신순")]',
+    '//*[@role="menuitem"][contains(., "최신순")]',
+    '//*[@role="option"][contains(., "최신순")]',
+    '//*[contains(text(), "최신순")]',
+]
+
+
+def find_recent_sort_option(drv):
+    for xpath in RECENT_SORT_OPTION_XPATHS:
+        try:
+            return WebDriverWait(drv, 3).until(EC.element_to_be_clickable((By.XPATH, xpath)))
+        except Exception:
+            continue
+    raise TimeoutError("최신순 옵션을 찾지 못함 (시도한 선택자 전부 실패)")
+
+
 def crawl_place(drv, wait: WebDriverWait, keyword: str, place_name: str, region: str, url: str):
     """장소 1곳을 크롤링해서 (장소정보 dict, 리뷰 dict 리스트)를 반환한다."""
     print(f"\n{'=' * 60}")
@@ -238,9 +257,7 @@ def crawl_place(drv, wait: WebDriverWait, keyword: str, place_name: str, region:
             sort_button = find_sort_button(drv)
             drv.execute_script("arguments[0].click();", sort_button)
             time.sleep(1)
-            recent_option = WebDriverWait(drv, 5).until(
-                EC.element_to_be_clickable((By.XPATH, '//div[@role="menuitemradio"][contains(., "최신순")]'))
-            )
+            recent_option = find_recent_sort_option(drv)
             drv.execute_script("arguments[0].click();", recent_option)
             time.sleep(2)
             print("✅ 정렬: 최신순으로 변경 성공")
