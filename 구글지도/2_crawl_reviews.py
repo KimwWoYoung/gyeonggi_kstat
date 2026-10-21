@@ -1,20 +1,68 @@
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
-import pandas as pd
-import time
-import re
+"""
+2_crawl_reviews.py
+1_collect_urls.py(또는 수작업으로 검증해둔 google_maps_urls_gyeonggi.csv)의
+장소 URL을 하나씩 열어 장소정보 + 리뷰(별점/날짜/본문)를 수집한다.
+
+리뷰 정렬:
+    리뷰 탭을 연 뒤 정렬을 '관련성순'(기본값)에서 '최신순'으로 바꾸고
+    나서 스크롤한다. 정렬 변경에 실패하면 기본 정렬로 계속 진행한다.
+
+중간저장 / 이어하기:
+    장소 1곳을 다 처리할 때마다 리뷰 결과를 CHECKPOINT_CSV에 즉시
+    append한다. 재실행하면 이미 CHECKPOINT_CSV에 있는 장소(URL 기준)는
+    건너뛰고 남은 곳부터 이어서 처리한다. 크롬이 크래시로 죽으면
+    드라이버를 자동으로 새로 띄우고 계속 진행한다.
+
+날짜 필터:
+    구글 리뷰는 날짜가 "3개월 전" 같은 상대 날짜로만 나오므로, 오늘
+    날짜 기준으로 역산해 절대 날짜로 근사 변환(parse_relative_date_kr)한
+    뒤 START_DATE~END_DATE 안에 드는 것만 최종 결과에 포함한다. 최대
+    수 주 정도 오차가 있을 수 있다. 필터링 전 원본은 CHECKPOINT_CSV에
+    그대로 남아있다.
+
+사용법:
+    python 1_collect_urls.py 를 먼저 실행해 CSV를 만든 뒤
+    python 2_crawl_reviews.py 실행
+"""
+
 import os
+import re
+import time
 from datetime import datetime, timedelta
 
-from config import CSV_OUTPUT, CHROME_USER_DATA_DIR, CHROME_PROFILE
+import pandas as pd
+from selenium import webdriver
+from selenium.common.exceptions import WebDriverException
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+from webdriver_manager.chrome import ChromeDriverManager
+
+from config import CSV_OUTPUT
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+INPUT_CSV = os.path.join(SCRIPT_DIR, CSV_OUTPUT)
+CHECKPOINT_CSV = os.path.join(SCRIPT_DIR, "google_maps_reviews_checkpoint.csv")
+OUTPUT_XLSX = os.path.join(SCRIPT_DIR, "gyeonggi_reviews_202607_202609.xlsx")
+
+# 이미 다른 실행에서 앞쪽 몇 곳을 끝내둔 경우에만 0보다 크게 설정.
+# (체크포인트로 이미 자동 이어하기가 되므로 보통은 0으로 둔다.)
+SKIP_FIRST_N = 0
+
+TARGET_REVIEWS = 200
 
 # 수집 기간 (리뷰 작성일 기준)
-START_DATE = "2026-04-01"
-END_DATE = "2026-06-30"
+START_DATE = "2026-07-01"
+END_DATE = "2026-09-30"
+
+RESULT_COLUMNS = ["키워드", "장소명", "지역", "URL", "ID", "별점", "기간", "리뷰"]
+PLACE_COLUMNS = ["키워드", "지역", "장소명", "주소", "별점", "URL", "리뷰개수"]
+
+# prefs로 로그인 차단해도 계속 2단계 인증이 뜨면(조직 정책이 강제 로그인일 경우)
+# True로 바꿔서 --guest 모드로 시도해보세요.
+USE_GUEST_MODE = False
+CHROME_USER_DATA_DIR = os.path.expanduser(os.path.join("~", "selenium_profile_test_single"))
 
 
 def parse_relative_date_kr(text: str, reference: datetime) -> "datetime | None":
@@ -47,401 +95,283 @@ def parse_relative_date_kr(text: str, reference: datetime) -> "datetime | None":
     return None
 
 
-# 브라우저 설정
-options = webdriver.ChromeOptions()
-options.add_argument("--start-maximized")
-options.add_argument(f"--user-data-dir={CHROME_USER_DATA_DIR}")
-options.add_argument(f"--profile-directory={CHROME_PROFILE}")
-driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-wait = WebDriverWait(driver, 15)
+def build_driver():
+    options = webdriver.ChromeOptions()
+    options.add_argument("--start-maximized")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
 
-# CSV 파일 읽기 (1_collect_urls.py 실행 결과)
-script_dir = os.path.dirname(os.path.abspath(__file__))
-csv_file = os.path.join(script_dir, CSV_OUTPUT)
+    # GPU 가속 관련 크래시("GPU state invalid after WaitForGetOffsetInRange") 방지.
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-software-rasterizer")
+    options.add_argument("--disable-dev-shm-usage")
 
-if not os.path.exists(csv_file):
-    print(f"[❌] CSV 파일을 찾을 수 없습니다: {csv_file}")
-    print("     1_collect_urls.py 를 먼저 실행하세요.")
-    exit(1)
+    if USE_GUEST_MODE:
+        options.add_argument("--guest")
+    else:
+        options.add_argument(f"--user-data-dir={CHROME_USER_DATA_DIR}")
+        options.add_argument("--profile-directory=Default")
+        # 이 프로필이 조직 계정 등으로 자동 로그인/동기화되는 것을 최대한 막는다.
+        options.add_argument("--disable-sync")
+        options.add_argument("--disable-features=SigninInterceptBubble,ChromeSigninInterceptWelcome")
+        options.add_experimental_option(
+            "prefs",
+            {
+                "credentials_enable_service": False,
+                "signin.allowed_on_next_startup": False,
+                "profile.password_manager_enabled": False,
+            },
+        )
 
-df = pd.read_csv(csv_file, encoding='utf-8-sig')
+    drv = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    drv.set_page_load_timeout(30)
+    return drv
 
-# 전체 URL 처리 (리밋 없음)
-print(f"[📊] 총 {len(df)}개의 URL을 처리합니다.")
-print(f"[수집 기간] {START_DATE} ~ {END_DATE} (리뷰 작성일 기준, 상대 날짜를 오늘 기준으로 근사 변환)\n")
 
-REFERENCE_NOW = datetime.now()
+def load_checkpoint() -> pd.DataFrame:
+    if os.path.exists(CHECKPOINT_CSV):
+        return pd.read_csv(CHECKPOINT_CSV, encoding="utf-8-sig", dtype=str)
+    return pd.DataFrame(columns=RESULT_COLUMNS)
 
-all_restaurant_data = []
-all_reviews_data = []
 
-for idx, row in df.iterrows():
-    url = row['URL']
-    place_name = row['장소명']
-    region = row['지역']
-    
-    print(f"\n{'='*60}")
-    print(f"[{idx+1}/{len(df)}] 처리 중: {place_name}")
-    print(f"URL: {url}")
-    print(f"{'='*60}")
-    
+def append_checkpoint(rows: list[dict]) -> None:
+    if not rows:
+        return
+    write_header = not os.path.exists(CHECKPOINT_CSV)
+    pd.DataFrame(rows, columns=RESULT_COLUMNS).to_csv(
+        CHECKPOINT_CSV, mode="a", index=False, header=write_header, encoding="utf-8-sig"
+    )
+
+
+def crawl_place(drv, wait: WebDriverWait, keyword: str, place_name: str, region: str, url: str):
+    """장소 1곳을 크롤링해서 (장소정보 dict, 리뷰 dict 리스트)를 반환한다."""
+    print(f"\n{'=' * 60}")
+    print(f"[{keyword}] {place_name}\n{url}")
+    print(f"{'=' * 60}")
+
     try:
-        driver.get(url)
-        time.sleep(5)
-        
-        try:
-            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'h1.DUwDvf')))
-            print("✅ 페이지 로드 완료")
-        except:
-            print("[⚠️] 페이지 로드 확인 실패, 계속 진행...")
-            time.sleep(3)
-        
-        try:
-            name = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'h1.DUwDvf'))).text
-        except:
-            name = place_name
-        
-        try:
-            address = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[data-item-id="address"]'))).text
-        except:
-            address = ""
-        
-        try:
-            rating = driver.find_element(By.CSS_SELECTOR, 'div.F7nice span:nth-child(1)').text
-        except:
-            rating = ""
-        
-        reviews_data = []
-        review_button_clicked = False
-        try:
-            try:
-                try:
-                    review_button = wait.until(EC.element_to_be_clickable((By.XPATH, '//button[contains(@aria-label, "리뷰")]')))
-                    driver.execute_script("arguments[0].click();", review_button)
-                    print("✅ 리뷰 버튼 클릭 성공 (aria-label 방법)")
-                    review_button_clicked = True
-                except:
-                    try:
-                        button_container_xpath = '//*[@id="QA0Szd"]/div/div/div[1]/div[2]/div/div[1]/div/div/div[3]/div/div'
-                        button_container = wait.until(EC.presence_of_element_located((By.XPATH, button_container_xpath)))
-                        buttons = button_container.find_elements(By.XPATH, './button')
-                        button_count = len(buttons)
-                        print(f"[📝] 발견된 버튼 개수: {button_count}")
-                        
-                        for i, btn in enumerate(buttons, 1):
-                            try:
-                                aria_label = btn.get_attribute("aria-label")
-                                print(f"  버튼 {i}: {aria_label}")
-                            except:
-                                print(f"  버튼 {i}: aria-label 없음")
-                        
-                        if button_count == 4:
-                            review_button_index = 3
-                        elif button_count == 3:
-                            review_button_index = 2
-                        else:
-                            review_button_index = button_count - 1
-                        
-                        if review_button_index <= button_count:
-                            review_button = buttons[review_button_index - 1]
-                            driver.execute_script("arguments[0].click();", review_button)
-                            print(f"✅ 리뷰 버튼 클릭 성공 (버튼 {review_button_index}/{button_count})")
-                            review_button_clicked = True
-                        else:
-                            raise Exception("리뷰 버튼 인덱스가 버튼 개수를 초과함")
-                    except Exception as e:
-                        print(f"[⚠️] 동적 버튼 찾기 실패: {e}")
-                        try:
-                            review_button_xpath = '//*[@id="QA0Szd"]/div/div/div[1]/div[2]/div/div[1]/div/div/div[3]/div/div/button[2]'
-                            review_button = wait.until(EC.element_to_be_clickable((By.XPATH, review_button_xpath)))
-                            driver.execute_script("arguments[0].click();", review_button)
-                            print("✅ 리뷰 버튼 클릭 성공 (고정 XPath 방법)")
-                            review_button_clicked = True
-                        except Exception as e2:
-                            print(f"[⚠️] 리뷰 버튼 클릭 실패: {e2}")
-                
-                if review_button_clicked:
-                    time.sleep(3)
-                    try:
-                        driver.execute_script("window.scrollBy(0, 500);")
-                        time.sleep(1)
-                    except:
-                        pass
-                else:
-                    print("[⚠️] 리뷰 버튼 클릭 실패")
-                    time.sleep(2)
-            except Exception as e:
-                print(f"[⚠️] 리뷰 버튼 클릭 전체 실패: {e}")
-            
-            try:
-                review_container = None
-                try:
-                    review_container_xpath = '//*[@id="QA0Szd"]/div/div/div[1]/div[2]/div/div[1]/div/div/div[2]/div[9]'
-                    wait_time = WebDriverWait(driver, 10 if review_button_clicked else 5)
-                    review_container = wait_time.until(EC.presence_of_element_located((By.XPATH, review_container_xpath)))
-                    print("✅ 리뷰 컨테이너 찾기 성공 (방법1)")
-                except Exception as e1:
-                    print(f"[⚠️] 방법1 실패: {e1}")
-                    try:
-                        for div_index in [8, 9, 10, 11]:
-                            try:
-                                alt_xpath = f'//*[@id="QA0Szd"]/div/div/div[1]/div[2]/div/div[1]/div/div/div[2]/div[{div_index}]'
-                                review_container = driver.find_element(By.XPATH, alt_xpath)
-                                test_items = review_container.find_elements(By.XPATH, './/div/div/div[4]')
-                                if len(test_items) > 0:
-                                    print(f"✅ 리뷰 컨테이너 찾기 성공 (방법2 - div[{div_index}])")
-                                    break
-                            except:
-                                continue
-                    except Exception as e2:
-                        print(f"[⚠️] 방법2 실패: {e2}")
-                        try:
-                            review_container = driver.find_element(By.CSS_SELECTOR, 'div.m6QErb.DxyBCb.kA9KIf.dS8AEf')
-                            test_items = review_container.find_elements(By.XPATH, './/div/div/div[4]')
-                            if len(test_items) > 0:
-                                print("✅ 리뷰 컨테이너 찾기 성공 (방법3 - CSS 선택자)")
-                            else:
-                                raise Exception("리뷰 항목이 없음")
-                        except Exception as e3:
-                            print(f"[⚠️] 방법3 실패: {e3}")
-                            review_container = None
-                
-                if review_container is None:
-                    print("[⚠️] 리뷰 컨테이너를 찾지 못해 리뷰 추출을 건너뜁니다.")
-                    reviews_data = []
-                else:
-                    try:
-                        time.sleep(2)
-                        target_reviews = 200
-                        print(f"[📜] 리뷰 로드 중... (최대 {target_reviews}개)")
-                        
-                        try:
-                            scrollable_div = driver.find_element(By.CSS_SELECTOR, 'div.m6QErb.DxyBCb.kA9KIf.dS8AEf')
-                            print("✅ 스크롤 가능한 div 찾기 성공")
-                        except Exception as e:
-                            print(f"[⚠️] 스크롤 가능한 div 찾기 실패: {e}")
-                            scrollable_div = review_container
-                        
-                        max_scrolls = 20
-                        no_change_count = 0
-                        max_no_change = 3
-                        previous_review_count = len(review_container.find_elements(By.XPATH, './/div/div/div[4]'))
-                        print(f"[📝] 초기 리뷰 개수: {previous_review_count}")
-                        
-                        if previous_review_count >= target_reviews:
-                            print(f"[📜] 이미 목표 리뷰 개수({target_reviews}개) 이상입니다.")
-                        else:
-                            for i in range(max_scrolls):
-                                if previous_review_count >= target_reviews:
-                                    break
-                                driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight', scrollable_div)
-                                time.sleep(2)
-                                current_review_count = len(review_container.find_elements(By.XPATH, './/div/div/div[4]'))
-                                if current_review_count > previous_review_count:
-                                    print(f"[📜] 스크롤 {i+1}회 - 리뷰: {previous_review_count} → {current_review_count}")
-                                    previous_review_count = current_review_count
-                                    no_change_count = 0
-                                else:
-                                    no_change_count += 1
-                                    if no_change_count >= max_no_change:
-                                        print(f"[📜] 연속 {max_no_change}회 변화 없음. 스크롤 중단.")
-                                        break
-                        
-                        time.sleep(2)
-                        final_review_count = len(review_container.find_elements(By.XPATH, './/div/div/div[4]'))
-                        print(f"[📜] 최종 리뷰 개수: {final_review_count}")
-                        
-                        review_items = review_container.find_elements(By.XPATH, './/div/div/div[4]')
-                        print(f"[📝] 방법1 - {len(review_items)}개")
-                        
-                        if len(review_items) == 0:
-                            review_items_with_id = review_container.find_elements(By.XPATH, './/div[@data-review-id]')
-                            for item_with_id in review_items_with_id:
-                                try:
-                                    parent = item_with_id.find_element(By.XPATH, './ancestor::div[1]')
-                                    div4 = parent.find_element(By.XPATH, './/div/div/div[4]')
-                                    if div4 not in review_items:
-                                        review_items.append(div4)
-                                except:
-                                    pass
-                        
-                        if len(review_items) == 0:
-                            review_items_css = review_container.find_elements(By.CSS_SELECTOR, 'div.jftiEf')
-                            for item_css in review_items_css:
-                                try:
-                                    div4 = item_css.find_element(By.XPATH, './/div/div/div[4]')
-                                    if div4 not in review_items:
-                                        review_items.append(div4)
-                                except:
-                                    pass
-                        
-                        review_items = list(dict.fromkeys(review_items))
-                        print(f"[📝] 최종 리뷰 개수 (중복 제거 후): {len(review_items)}")
-                        
-                        review_text_elements = driver.find_elements(By.CSS_SELECTOR, 'div.MyEned span.wi17pd')
-                        
-                        if len(review_items) > 0:
-                            for i in range(len(review_items)):
-                                try:
-                                    review_item = review_items[i]
-                                    
-                                    review_rating = ""
-                                    try:
-                                        try:
-                                            rating_elem = review_item.find_element(By.CSS_SELECTOR, 'span.kvMYJc')
-                                            review_rating = rating_elem.get_attribute("aria-label") or rating_elem.text.strip()
-                                        except:
-                                            try:
-                                                du9pgb = review_item.find_element(By.CSS_SELECTOR, 'div.DU9Pgb')
-                                                rating_elem = du9pgb.find_element(By.CSS_SELECTOR, 'span.kvMYJc')
-                                                review_rating = rating_elem.get_attribute("aria-label") or rating_elem.text.strip()
-                                            except:
-                                                try:
-                                                    rating_elem = review_item.find_element(By.XPATH, './div[1]/span[1]')
-                                                    review_rating = rating_elem.get_attribute("aria-label") or rating_elem.text.strip()
-                                                except:
-                                                    pass
-                                        
-                                        if review_rating:
-                                            if "별표" in review_rating and "개" in review_rating:
-                                                numbers = re.findall(r'\d+', review_rating)
-                                                if numbers:
-                                                    review_rating = numbers[0]
-                                            elif "점" in review_rating:
-                                                review_rating = review_rating.split("점")[0].strip()
-                                            elif "out of" in review_rating:
-                                                review_rating = review_rating.split("out of")[0].strip()
-                                            else:
-                                                numbers = re.findall(r'\d+', review_rating)
-                                                if numbers:
-                                                    review_rating = numbers[0]
-                                    except Exception as e:
-                                        print(f"[⚠️] 리뷰 {i+1} 별점 추출 실패: {e}")
-                                    
-                                    review_date = ""
-                                    try:
-                                        date_elem = review_item.find_element(By.XPATH, './div[1]/span[2]')
-                                        review_date = date_elem.text.strip()
-                                    except:
-                                        pass
-                                    
-                                    review_text = ""
-                                    try:
-                                        try:
-                                            review_text_elem = review_item.find_element(By.XPATH, './div[2]/div/span[1]')
-                                            review_text = review_text_elem.text.strip()
-                                        except:
-                                            try:
-                                                div2 = review_item.find_element(By.XPATH, './div[2]')
-                                                review_text_elem = div2.find_element(By.CSS_SELECTOR, 'span.wi17pd')
-                                                review_text = review_text_elem.text.strip()
-                                            except:
-                                                try:
-                                                    div2 = review_item.find_element(By.XPATH, './div[2]')
-                                                    review_text = div2.find_element(By.CSS_SELECTOR, 'span').text.strip()
-                                                except:
-                                                    pass
-                                        
-                                        if not review_text:
-                                            review_id = None
-                                            try:
-                                                parent_with_id = review_item.find_element(By.XPATH, './ancestor::div[@data-review-id][1]')
-                                                review_id = parent_with_id.get_attribute("data-review-id")
-                                            except:
-                                                pass
-                                            
-                                            if review_id:
-                                                try:
-                                                    review_text_elem = driver.find_element(By.XPATH, f'//div[@data-review-id="{review_id}"]//div[@class="MyEned"]//span[@class="wi17pd"]')
-                                                    review_text = review_text_elem.text.strip()
-                                                except:
-                                                    pass
-                                        
-                                        if not review_text and i < len(review_text_elements):
-                                            try:
-                                                review_text = review_text_elements[i].text.strip()
-                                            except:
-                                                pass
-                                        
-                                        if not review_text:
-                                            try:
-                                                myened = review_item.find_element(By.CSS_SELECTOR, 'div.MyEned')
-                                                review_text = myened.find_element(By.CSS_SELECTOR, 'span.wi17pd').text.strip()
-                                            except:
-                                                try:
-                                                    parent = review_item.find_element(By.XPATH, './ancestor::div[@data-review-id][1]')
-                                                    myened = parent.find_element(By.CSS_SELECTOR, 'div.MyEned')
-                                                    review_text = myened.find_element(By.CSS_SELECTOR, 'span.wi17pd').text.strip()
-                                                except:
-                                                    pass
-                                    except Exception as e:
-                                        print(f"[⚠️] 리뷰 {i+1} 텍스트 추출 오류: {e}")
-                                    
-                                    if review_rating or review_text:
-                                        estimated_date = parse_relative_date_kr(review_date, REFERENCE_NOW)
-                                        estimated_date_str = estimated_date.strftime("%Y-%m-%d") if estimated_date else ""
-                                        if not (estimated_date_str and START_DATE <= estimated_date_str <= END_DATE):
-                                            continue  # 기간(2026-04~06) 밖으로 추정되는 리뷰는 제외
-                                        reviews_data.append({
-                                            "장소명": name,
-                                            "URL": url,
-                                            "ID": i+1,
-                                            "별점": review_rating,
-                                            "기간": review_date,
-                                            "추정날짜": estimated_date_str,
-                                            "리뷰": review_text
-                                        })
-                                except Exception as e:
-                                    print(f"[⚠️] 리뷰 {i+1} 추출 오류: {e}")
-                                    continue
-                        else:
-                            print("[❌] 리뷰 항목을 찾지 못했습니다.")
-                        
-                        print(f"[✅] {len(reviews_data)}개의 리뷰 추출 완료")
-                    except Exception as e:
-                        print(f"[❌] 리뷰 컨테이너 처리 오류: {e}")
-                        reviews_data = []
-            
-            except Exception as e:
-                print(f"[❌] 리뷰 추출 실패: {e}")
-                reviews_data = []
-        
-        except Exception as e:
-            print(f"[❌] 리뷰 크롤링 전체 실패: {e}")
-            reviews_data = []
-        
-        restaurant_data = {
-            "지역": region,
-            "장소명": name,
-            "주소": address,
-            "별점": rating,
-            "URL": url,
-            "리뷰개수": len(reviews_data)
-        }
-        all_restaurant_data.append(restaurant_data)
-        all_reviews_data.extend(reviews_data)
-        
-        print(f"[✅] {place_name} 처리 완료 - 리뷰 {len(reviews_data)}개 추출")
-        
+        drv.get(url)
     except Exception as e:
-        print(f"[❌] {place_name} 처리 중 오류 발생: {e}")
-        import traceback
-        traceback.print_exc()
-        continue
+        print(f"[⚠️] 페이지 로드 타임아웃/오류 (계속 진행): {e}")
+    time.sleep(3)
 
-# Excel 저장
-print(f"\n{'='*60}")
-print("[💾] 데이터 저장 중...")
+    try:
+        name = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "h1.DUwDvf"))).text
+    except Exception:
+        name = place_name
 
-output_file = os.path.join(script_dir, 'gyeonggi_reviews_202604_202606.xlsx')
+    try:
+        address = drv.find_element(By.CSS_SELECTOR, 'button[data-item-id="address"]').text
+    except Exception:
+        address = ""
 
-with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
-    pd.DataFrame(all_restaurant_data).to_excel(writer, sheet_name='장소정보', index=False)
-    pd.DataFrame(all_reviews_data).to_excel(writer, sheet_name='리뷰', index=False)
+    try:
+        rating = drv.find_element(By.CSS_SELECTOR, "div.F7nice span:nth-child(1)").text
+    except Exception:
+        rating = ""
 
-print(f"[💾] {output_file} 저장 완료")
-print(f"[📊] 장소정보: {len(all_restaurant_data)}개")
-print(f"[📊] 리뷰: {len(all_reviews_data)}개")
+    review_button_clicked = False
+    try:
+        review_button = wait.until(
+            EC.element_to_be_clickable((By.XPATH, '//button[contains(@aria-label, "리뷰")]'))
+        )
+        drv.execute_script("arguments[0].click();", review_button)
+        review_button_clicked = True
+        print("✅ 리뷰 버튼 클릭 성공")
+    except Exception as e:
+        print("[❌] 리뷰 버튼 클릭 실패:", e)
 
-driver.quit()
-print("\n[✅] 크롤링 완료!")
+    time.sleep(3)
+
+    reviews_data: list[dict] = []
+    if review_button_clicked:
+        try:
+            sort_button = wait.until(
+                EC.element_to_be_clickable((By.XPATH, '//button[contains(@aria-label, "정렬")]'))
+            )
+            drv.execute_script("arguments[0].click();", sort_button)
+            time.sleep(1)
+            recent_option = WebDriverWait(drv, 5).until(
+                EC.element_to_be_clickable((By.XPATH, '//div[@role="menuitemradio"][contains(., "최신순")]'))
+            )
+            drv.execute_script("arguments[0].click();", recent_option)
+            time.sleep(2)
+            print("✅ 정렬: 최신순으로 변경 성공")
+        except Exception as e:
+            print("[⚠️] 정렬(최신순) 변경 실패, 기본 정렬로 진행:", e)
+
+        try:
+            review_container = drv.find_element(By.CSS_SELECTOR, "div.m6QErb.DxyBCb.kA9KIf.dS8AEf")
+
+            prev_count = len(review_container.find_elements(By.XPATH, ".//div/div/div[4]"))
+            print(f"[📜] 초기 리뷰 개수: {prev_count}")
+            no_change_count = 0
+            for i in range(20):
+                if prev_count >= TARGET_REVIEWS:
+                    break
+                drv.execute_script(
+                    "arguments[0].scrollTop = arguments[0].scrollHeight", review_container
+                )
+                time.sleep(2)
+                curr_count = len(review_container.find_elements(By.XPATH, ".//div/div/div[4]"))
+                if curr_count > prev_count:
+                    print(f"  스크롤 {i + 1}회 - {prev_count} → {curr_count}")
+                    prev_count = curr_count
+                    no_change_count = 0
+                else:
+                    no_change_count += 1
+                    if no_change_count >= 3:
+                        print("  연속 3회 변화 없음. 스크롤 종료.")
+                        break
+
+            review_items = review_container.find_elements(By.XPATH, ".//div/div/div[4]")
+            review_items = list(dict.fromkeys(review_items))
+            print(f"[📝] 최종 리뷰 항목 수: {len(review_items)}")
+
+            for i, review_item in enumerate(review_items):
+                review_rating = ""
+                try:
+                    rating_elem = review_item.find_element(By.CSS_SELECTOR, "span.kvMYJc")
+                    review_rating = rating_elem.get_attribute("aria-label") or ""
+                    numbers = re.findall(r"\d+", review_rating)
+                    if numbers:
+                        review_rating = numbers[0]
+                except Exception:
+                    pass
+
+                review_date = ""
+                try:
+                    review_date = review_item.find_element(By.XPATH, "./div[1]/span[2]").text.strip()
+                except Exception:
+                    pass
+
+                review_text = ""
+                for selector in [
+                    lambda: review_item.find_element(By.XPATH, "./div[2]/div/span[1]").text.strip(),
+                    lambda: review_item.find_element(By.CSS_SELECTOR, "span.wi17pd").text.strip(),
+                ]:
+                    try:
+                        review_text = selector()
+                        if review_text:
+                            break
+                    except Exception:
+                        continue
+
+                if review_rating or review_text:
+                    reviews_data.append({
+                        "키워드": keyword,
+                        "장소명": name,
+                        "지역": region,
+                        "URL": url,
+                        "ID": i + 1,
+                        "별점": review_rating,
+                        "기간": review_date,
+                        "리뷰": review_text,
+                    })
+
+            print(f"[✅] 본문/별점/날짜 추출 완료: {len(reviews_data)}건")
+        except Exception as e:
+            print("[❌] 리뷰 컨테이너/추출 실패:", e)
+
+    place_row = {
+        "키워드": keyword,
+        "지역": region,
+        "장소명": name,
+        "주소": address,
+        "별점": rating,
+        "URL": url,
+        "리뷰개수": len(reviews_data),
+    }
+    return place_row, reviews_data
+
+
+def main():
+    if not os.path.exists(INPUT_CSV):
+        print(f"[❌] {INPUT_CSV} 없음")
+        print("     1_collect_urls.py 를 먼저 실행하세요.")
+        return
+
+    df = pd.read_csv(INPUT_CSV, encoding="utf-8-sig", keep_default_na=False)
+
+    # 먼저 SKIP_FIRST_N으로 원본 순서 기준 앞부분을 자르고, 그다음 URL 없는
+    # 행을 걸러낸다. 순서를 바꾸면 앞쪽에 섞여있는 빈 URL 행 때문에
+    # SKIP_FIRST_N이 어긋난다.
+    if SKIP_FIRST_N:
+        print(f"[ℹ️] 앞의 {SKIP_FIRST_N}개는 건너뜁니다: {df['장소명'].head(SKIP_FIRST_N).tolist()}")
+        df = df.iloc[SKIP_FIRST_N:].reset_index(drop=True)
+
+    has_url = df["URL"].str.strip().str.startswith("http")
+    no_url_count = (~has_url).sum()
+    if no_url_count:
+        print(f"[ℹ️] URL이 없는(\"없음\" 등) {no_url_count}곳은 건너뜁니다: "
+              f"{df.loc[~has_url, '장소명'].tolist()}")
+        df = df[has_url].reset_index(drop=True)
+
+    checkpoint_df = load_checkpoint()
+    done_urls = set(checkpoint_df["URL"]) if not checkpoint_df.empty else set()
+    remaining = df[~df["URL"].isin(done_urls)]
+
+    print(f"[📋] 전체 {len(df)}곳 중 처리 완료 {df['URL'].isin(done_urls).sum()}곳, 남은 {len(remaining)}곳")
+    print(f"[수집 기간] {START_DATE} ~ {END_DATE} (리뷰 작성일 기준, 상대 날짜를 오늘 기준으로 근사 변환)\n")
+
+    drv = build_driver()
+    wait = WebDriverWait(drv, 15)
+
+    all_place_rows = []
+
+    for _, row in remaining.iterrows():
+        keyword = row.get("키워드", row.get("장소명", ""))
+        place_name = row["장소명"]
+        region = row.get("지역", "경기도")
+        url = row["URL"]
+
+        try:
+            place_row, reviews = crawl_place(drv, wait, keyword, place_name, region, url)
+        except WebDriverException as e:
+            print(f"[⚠️] 드라이버 오류(브라우저 크래시 의심), 재시작 후 다음 장소로: {e}")
+            try:
+                drv.quit()
+            except Exception:
+                pass
+            drv = build_driver()
+            wait = WebDriverWait(drv, 15)
+            continue
+        except Exception as e:
+            print(f"[❌] {place_name} 처리 중 알 수 없는 오류: {e}")
+            continue
+
+        all_place_rows.append(place_row)
+        append_checkpoint(reviews)
+
+    try:
+        drv.quit()
+    except Exception:
+        pass
+
+    # 최종 xlsx는 체크포인트(이번 실행 + 이전 실행 누적) 전체로 만든다.
+    final_reviews_df = load_checkpoint()
+
+    if not final_reviews_df.empty:
+        reference_now = datetime.now()
+        estimated = final_reviews_df["기간"].apply(lambda t: parse_relative_date_kr(t, reference_now))
+        final_reviews_df = final_reviews_df.copy()
+        final_reviews_df["추정날짜"] = estimated.apply(lambda d: d.strftime("%Y-%m-%d") if pd.notna(d) else "")
+        in_range = final_reviews_df["추정날짜"].between(START_DATE, END_DATE)
+        no_date = final_reviews_df["추정날짜"] == ""
+        filtered_reviews_df = final_reviews_df[in_range | no_date]
+    else:
+        filtered_reviews_df = final_reviews_df
+
+    with pd.ExcelWriter(OUTPUT_XLSX, engine="openpyxl") as writer:
+        pd.DataFrame(all_place_rows, columns=PLACE_COLUMNS).to_excel(writer, sheet_name="장소정보", index=False)
+        filtered_reviews_df.to_excel(writer, sheet_name="리뷰", index=False)
+
+    print(f"\n[💾] {OUTPUT_XLSX} 저장 완료")
+    print(f"[📊] 이번 실행 장소: {len(all_place_rows)}곳")
+    print(f"[📊] 체크포인트 누적 리뷰: {len(final_reviews_df)}건 -> 기간({START_DATE}~{END_DATE}) 필터링 후: {len(filtered_reviews_df)}건")
+    print(f"[ℹ️] 필터링 전 전체 리뷰 원본은 {CHECKPOINT_CSV} 에 그대로 남아있습니다.")
+
+
+if __name__ == "__main__":
+    main()
