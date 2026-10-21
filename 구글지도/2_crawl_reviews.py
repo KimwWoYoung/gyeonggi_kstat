@@ -32,7 +32,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 from selenium import webdriver
-from selenium.common.exceptions import WebDriverException
+from selenium.common.exceptions import InvalidSessionIdException, WebDriverException
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
@@ -144,6 +144,18 @@ def append_checkpoint(rows: list[dict]) -> None:
     )
 
 
+def _reraise_if_session_dead(e: Exception) -> None:
+    """크롬이 실제로 크래시/연결 끊김 상태인 예외는 숨기지 않고 다시 던진다.
+    그래야 main()의 크래시 복구 로직(드라이버 재시작)이 작동한다. 그냥
+    '요소를 못 찾음' 같은 정상적인 실패는 그대로 삼켜지고 넘어간다."""
+    if isinstance(e, InvalidSessionIdException):
+        raise e
+    msg = str(e).lower()
+    if "invalid session id" in msg or "chrome not reachable" in msg or "session deleted" in msg \
+            or "disconnected" in msg or "target window already closed" in msg:
+        raise e
+
+
 def close_login_promo_popup(drv) -> None:
     """게스트 모드에서 뜨는 '로그인하여 Google 지도를 최대한 활용하세요' 홍보 팝업을 닫는다.
     로그인 없이도 리뷰 조회에는 지장 없지만, 팝업이 떠있으면 뒤쪽 버튼 클릭이 막힌다."""
@@ -166,6 +178,7 @@ def crawl_place(drv, wait: WebDriverWait, keyword: str, place_name: str, region:
     try:
         drv.get(url)
     except Exception as e:
+        _reraise_if_session_dead(e)
         print(f"[⚠️] 페이지 로드 타임아웃/오류 (계속 진행): {e}")
     time.sleep(3)
 
@@ -173,7 +186,8 @@ def crawl_place(drv, wait: WebDriverWait, keyword: str, place_name: str, region:
 
     try:
         name = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "h1.DUwDvf"))).text
-    except Exception:
+    except Exception as e:
+        _reraise_if_session_dead(e)
         name = place_name
 
     try:
@@ -195,6 +209,7 @@ def crawl_place(drv, wait: WebDriverWait, keyword: str, place_name: str, region:
         review_button_clicked = True
         print("✅ 리뷰 버튼 클릭 성공")
     except Exception as e:
+        _reraise_if_session_dead(e)
         print("[❌] 리뷰 버튼 클릭 실패:", e)
 
     time.sleep(3)
@@ -214,6 +229,7 @@ def crawl_place(drv, wait: WebDriverWait, keyword: str, place_name: str, region:
             time.sleep(2)
             print("✅ 정렬: 최신순으로 변경 성공")
         except Exception as e:
+            _reraise_if_session_dead(e)
             print("[⚠️] 정렬(최신순) 변경 실패, 기본 정렬로 진행:", e)
 
         try:
@@ -287,6 +303,7 @@ def crawl_place(drv, wait: WebDriverWait, keyword: str, place_name: str, region:
 
             print(f"[✅] 본문/별점/날짜 추출 완료: {len(reviews_data)}건")
         except Exception as e:
+            _reraise_if_session_dead(e)
             print("[❌] 리뷰 컨테이너/추출 실패:", e)
 
     place_row = {
