@@ -169,6 +169,24 @@ def close_login_promo_popup(drv) -> None:
         pass
 
 
+# 정렬 버튼에 aria-label="정렬"이 없는 경우가 있어("정렬" 글자는 버튼 안
+# <span> 텍스트로만 들어있음), aria-label 기준과 텍스트 기준을 순서대로 시도한다.
+SORT_BUTTON_XPATHS = [
+    '//button[contains(@aria-label, "정렬")]',
+    '//button[.//span[contains(text(), "정렬")]]',
+    '//button[contains(., "정렬")]',
+]
+
+
+def find_sort_button(drv):
+    for xpath in SORT_BUTTON_XPATHS:
+        try:
+            return WebDriverWait(drv, 5).until(EC.element_to_be_clickable((By.XPATH, xpath)))
+        except Exception:
+            continue
+    raise TimeoutError("정렬 버튼을 찾지 못함 (시도한 선택자 전부 실패)")
+
+
 def crawl_place(drv, wait: WebDriverWait, keyword: str, place_name: str, region: str, url: str):
     """장소 1곳을 크롤링해서 (장소정보 dict, 리뷰 dict 리스트)를 반환한다."""
     print(f"\n{'=' * 60}")
@@ -217,9 +235,7 @@ def crawl_place(drv, wait: WebDriverWait, keyword: str, place_name: str, region:
     reviews_data: list[dict] = []
     if review_button_clicked:
         try:
-            sort_button = wait.until(
-                EC.element_to_be_clickable((By.XPATH, '//button[contains(@aria-label, "정렬")]'))
-            )
+            sort_button = find_sort_button(drv)
             drv.execute_script("arguments[0].click();", sort_button)
             time.sleep(1)
             recent_option = WebDriverWait(drv, 5).until(
