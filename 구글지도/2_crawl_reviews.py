@@ -67,11 +67,23 @@ PLACE_COLUMNS = ["키워드", "지역", "장소명", "주소", "별점", "URL", 
 
 # 게스트 모드(로그인 없음)에서는 '로그인하여 Google 지도를 최대한
 # 활용하세요' 팝업이 계속 다시 떠서 정렬 메뉴를 가리는 문제가 있었다.
-# 로그인해두면 이 팝업 자체가 안 뜬다. prefs로 로그인 차단해도 계속
-# 2단계 인증이 뜨면(조직 정책이 강제 로그인일 경우) True로 바꿔서
-# --guest 모드로 다시 시도해보세요.
+# True로 바꾸면 게스트 모드로 돌아간다(조직 정책 등으로 로그인 자체가
+# 막히는 경우에만 사용).
 USE_GUEST_MODE = False
-CHROME_USER_DATA_DIR = os.path.expanduser(os.path.join("~", "selenium_profile_test_single"))
+
+# 평소 쓰는 크롬에 이미 구글 로그인이 돼있는 프로필을 그대로 재사용한다.
+# (전용 selenium 프로필로 매번 새로 로그인하지 않고, 이미 로그인된 세션을
+# 그대로 가져다 쓰는 방식)
+# 주의: 이 경로를 쓰는 크롬이 하나라도 이미 떠있으면 실행이 안 되므로,
+# 스크립트를 돌리기 전 평소 쓰는 크롬 창을 전부 종료해야 한다.
+# 프로필 폴더명이 "Default"가 아니라면(크롬 프로필을 여러 개 쓰는 경우)
+# 크롬 주소창에 chrome://version 을 쳐서 "프로필 경로"를 확인해 아래
+# CHROME_PROFILE 값을 그 폴더명으로 바꿀 것(예: "Profile 1").
+CHROME_USER_DATA_DIR = os.path.join(
+    os.environ.get("LOCALAPPDATA", os.path.expanduser(os.path.join("~", "AppData", "Local"))),
+    "Google", "Chrome", "User Data",
+)
+CHROME_PROFILE = "Default"
 
 
 def parse_relative_date_kr(text: str, reference: datetime) -> "datetime | None":
@@ -119,19 +131,10 @@ def build_driver():
     if USE_GUEST_MODE:
         options.add_argument("--guest")
     else:
+        # 평소 쓰는 크롬 프로필을 그대로 재사용 - 이미 로그인된 세션을 가져다
+        # 쓰는 것이 목적이므로 로그인/동기화를 막는 옵션은 넣지 않는다.
         options.add_argument(f"--user-data-dir={CHROME_USER_DATA_DIR}")
-        options.add_argument("--profile-directory=Default")
-        # 이 프로필이 조직 계정 등으로 자동 로그인/동기화되는 것을 최대한 막는다.
-        options.add_argument("--disable-sync")
-        options.add_argument("--disable-features=SigninInterceptBubble,ChromeSigninInterceptWelcome")
-        options.add_experimental_option(
-            "prefs",
-            {
-                "credentials_enable_service": False,
-                "signin.allowed_on_next_startup": False,
-                "profile.password_manager_enabled": False,
-            },
-        )
+        options.add_argument(f"--profile-directory={CHROME_PROFILE}")
 
     drv = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
     drv.set_page_load_timeout(30)
