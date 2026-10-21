@@ -277,6 +277,10 @@ def crawl_place(drv, wait: WebDriverWait, keyword: str, place_name: str, region:
 
     time.sleep(3)
 
+    # 리뷰 탭을 연 뒤에 로그인 홍보 팝업이 다시 뜨는 경우가 있어, 정렬 버튼을
+    # 누르기 전에 한 번 더 닫는다(열려있으면 뒤쪽 정렬 메뉴 자체가 안 열림).
+    close_login_promo_popup(drv)
+
     reviews_data: list[dict] = []
     if review_button_clicked:
         try:
