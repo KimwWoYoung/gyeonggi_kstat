@@ -30,12 +30,11 @@ LINKS_CSV = Path("instagram_links.csv")
 CHECKPOINT_CSV = Path("instagram_detail_checkpoint.csv")
 FILTERED_OUTPUT_CSV = Path("instagram_links_filtered.csv")
 
-# 실제 수집 기간보다 여유를 넉넉히 둬서, 추정 오차로 진짜 기간 안 게시물을
-# 놓치지 않도록 한다. 검증 결과 중앙값 오차는 거의 0일로 매우 정확하지만,
-# 드물게(2%) 30일 이상, 심하면 470일 넘게 틀리는 이상치가 있었다. 그래서
-# 버퍼를 짧게(며칠) 잡지 않고 90일로 넉넉히 잡아, "애매한 건 방문해서
-# 직접 확인"하는 쪽을 우선한다 (시간 절약보다 누락 방지가 우선).
-SAFETY_BUFFER_DAYS = 90
+# 실제 수집 기간보다 여유를 둬서, 추정 오차로 진짜 기간 안 게시물을 놓치지
+# 않도록 한다. 검증 결과(541건 기준) 오차 7일 이내가 97.0%였다. 즉 7일
+# 버퍼를 쓰면 통계적으로 약 3%는 놓칠 위험이 있다는 뜻 — 시간 단축을
+# 우선해 이 값을 쓰기로 함(더 안전하게 하려면 숫자를 늘릴 것).
+SAFETY_BUFFER_DAYS = 7
 START_DATE = datetime(2026, 7, 1, tzinfo=timezone.utc) - timedelta(days=SAFETY_BUFFER_DAYS)
 END_DATE = datetime(2026, 9, 30, 23, 59, 59, tzinfo=timezone.utc) + timedelta(days=SAFETY_BUFFER_DAYS)
 
