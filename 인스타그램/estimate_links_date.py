@@ -132,7 +132,7 @@ def run_filter() -> None:
     kept.to_csv(FILTERED_OUTPUT_CSV, index=False, encoding="utf-8-sig")
 
     print(f"[전체] {len(df)}건")
-    print(f"[기간 추정 범위 안({START_DATE.date()}~{END_DATE.date()}, 여유 5일 포함)] {int(in_range.sum())}건")
+    print(f"[기간 추정 범위 안({START_DATE.date()}~{END_DATE.date()}, 여유 {SAFETY_BUFFER_DAYS}일 포함)] {int(in_range.sum())}건")
     print(f"[추정 실패(안전하게 포함)] {int(unknown.sum())}건")
     print(f"[제외] {len(df) - len(kept)}건")
     print(f"\n[저장] {len(kept)}건 -> {FILTERED_OUTPUT_CSV.resolve()}")
