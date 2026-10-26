@@ -30,10 +30,14 @@ LINKS_CSV = Path("instagram_links.csv")
 CHECKPOINT_CSV = Path("instagram_detail_checkpoint.csv")
 FILTERED_OUTPUT_CSV = Path("instagram_links_filtered.csv")
 
-# 실제 수집 기간보다 며칠 여유를 둬서, 추정 오차로 경계의 진짜 게시물을
-# 놓치지 않도록 한다.
-START_DATE = datetime(2026, 7, 1, tzinfo=timezone.utc) - timedelta(days=5)
-END_DATE = datetime(2026, 9, 30, 23, 59, 59, tzinfo=timezone.utc) + timedelta(days=5)
+# 실제 수집 기간보다 여유를 넉넉히 둬서, 추정 오차로 진짜 기간 안 게시물을
+# 놓치지 않도록 한다. 검증 결과 중앙값 오차는 거의 0일로 매우 정확하지만,
+# 드물게(2%) 30일 이상, 심하면 470일 넘게 틀리는 이상치가 있었다. 그래서
+# 버퍼를 짧게(며칠) 잡지 않고 90일로 넉넉히 잡아, "애매한 건 방문해서
+# 직접 확인"하는 쪽을 우선한다 (시간 절약보다 누락 방지가 우선).
+SAFETY_BUFFER_DAYS = 90
+START_DATE = datetime(2026, 7, 1, tzinfo=timezone.utc) - timedelta(days=SAFETY_BUFFER_DAYS)
+END_DATE = datetime(2026, 9, 30, 23, 59, 59, tzinfo=timezone.utc) + timedelta(days=SAFETY_BUFFER_DAYS)
 
 # 인스타그램 media_id 인코딩에 쓰이는 커스텀 base64 알파벳
 ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
