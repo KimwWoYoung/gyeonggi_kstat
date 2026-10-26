@@ -22,6 +22,29 @@
     본문/날짜/좋아요수/댓글수는 2_crawl_instagram_detail.py 에서 실제
     게시물 페이지를 열어 수집한다.
 
+중간저장 / 이어하기:
+    키워드 하나를 다 처리할 때마다 그 결과를 CHECKPOINT_CSV에 즉시
+    append하고, 처리한 키워드 이름을 DONE_KEYWORDS_FILE에 한 줄씩
+    기록한다. 중간에 중단돼도 그때까지 모은 키워드별 결과는 남아있다.
+    스크립트를 다시 실행하면 DONE_KEYWORDS_FILE에 이미 있는 키워드는
+    건너뛰고 남은 키워드만 이어서 처리한다. 처음부터 다시 돌리려면
+    CHECKPOINT_CSV와 DONE_KEYWORDS_FILE을 삭제하고 실행하면 된다.
+    OUTPUT_CSV는 매 실행 종료 시점의 CHECKPOINT_CSV 전체 내용으로
+    다시 생성된다.
+
+멈춤 감지 / 자동 종료 (watchdog):
+    인스타그램이 요청을 차단하면 페이지 로드가 응답 없이 그대로
+    멈춰버릴 수 있다. 이를 막기 위해:
+      1) driver에 페이지 로드 타임아웃(PAGE_LOAD_TIMEOUT_SEC)을 걸어
+         두어, 그 시간 안에 로드가 끝나지 않으면 TimeoutException으로
+         제어권을 돌려받아 해당 키워드만 실패 처리하고 다음으로 넘어간다.
+      2) 그래도 어떤 이유로든 STUCK_TIMEOUT_SEC 동안 진행(하트비트)이
+         전혀 없으면 별도 감시 스레드가 "멈춘 것"으로 판단해 프로세스를
+         강제 종료한다. 지금까지의 결과는 CHECKPOINT_CSV에 이미 저장돼
+         있으므로 스크립트를 다시 실행하면 멈췄던 지점부터 이어서 진행된다.
+    watchdog은 사람이 로그인을 직접 처리하는 대기 시간은 '멈춤'으로
+    오판하지 않도록, 그 대기가 끝난 뒤부터 가동한다.
+
 주의:
     - 인스타그램은 로그인 자동화에 대한 탐지(체크포인트/2단계 인증 요구)가
       강해서, 특히 새로운 IP(서버/클라우드 환경)에서는 로그인 자체가
@@ -40,11 +63,13 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from pathlib import Path
 
 import pandas as pd
 from selenium import webdriver
+from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
@@ -122,8 +147,45 @@ MAX_SCROLL_PER_KEYWORD = 80
 STOP_AFTER_NO_CHANGE = 5
 SLEEP_BETWEEN_KEYWORDS_SEC = 3.0
 OUTPUT_CSV = Path("instagram_links.csv")
+CHECKPOINT_CSV = Path("instagram_links_checkpoint.csv")
+DONE_KEYWORDS_FILE = Path("instagram_links_done_keywords.txt")
 
 FIELDNAMES = ["키워드", "채널", "URL"]
+
+# --- 멈춤 감지(watchdog) 관련 설정 ---
+PAGE_LOAD_TIMEOUT_SEC = 30          # drv.get() 이 이 시간 안에 안 끝나면 TimeoutException 발생
+STUCK_TIMEOUT_SEC = 300             # 이 시간 동안 진행(하트비트)이 없으면 프로세스 강제 종료
+WATCHDOG_CHECK_INTERVAL_SEC = 15
+
+
+_last_heartbeat = time.time()
+_heartbeat_lock = threading.Lock()
+
+
+def touch_heartbeat() -> None:
+    global _last_heartbeat
+    with _heartbeat_lock:
+        _last_heartbeat = time.time()
+
+
+def start_watchdog() -> None:
+    """STUCK_TIMEOUT_SEC 동안 진행이 없으면 프로세스를 강제 종료하는 감시 스레드 시작."""
+
+    def _watch():
+        while True:
+            time.sleep(WATCHDOG_CHECK_INTERVAL_SEC)
+            with _heartbeat_lock:
+                elapsed = time.time() - _last_heartbeat
+            if elapsed > STUCK_TIMEOUT_SEC:
+                print(
+                    f"\n[⛔ watchdog] {int(elapsed)}초 동안 진행이 없어 멈춘 것으로 "
+                    "판단, 프로세스를 강제 종료합니다. (CHECKPOINT_CSV에 저장된 "
+                    "내용은 남아있으니 다시 실행하면 이어서 진행됩니다)"
+                )
+                os._exit(1)
+
+    t = threading.Thread(target=_watch, daemon=True)
+    t.start()
 
 
 def build_driver() -> webdriver.Chrome:
@@ -137,6 +199,7 @@ def build_driver() -> webdriver.Chrome:
     options.add_argument(f"--user-data-dir={CHROME_USER_DATA_DIR}")
     options.add_argument("--profile-directory=Default")
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT_SEC)
     driver.execute_cdp_cmd(
         "Page.addScriptToEvaluateOnNewDocument",
         {"source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"},
@@ -144,9 +207,20 @@ def build_driver() -> webdriver.Chrome:
     return driver
 
 
+def safe_get(drv, url: str) -> None:
+    """페이지 로드가 PAGE_LOAD_TIMEOUT_SEC 안에 끝나지 않으면 로딩을 멈추고 넘어간다."""
+    try:
+        drv.get(url)
+    except TimeoutException:
+        try:
+            drv.execute_script("window.stop();")
+        except Exception:
+            pass
+
+
 def login(drv) -> None:
     """로그인은 자동 입력하지 않고 사람이 직접 한다 (아래 설명 참고)."""
-    drv.get("https://www.instagram.com/")
+    safe_get(drv, "https://www.instagram.com/")
 
     print("\n[⏸️] 브라우저가 열렸습니다. 이미 로그인돼 있으면 그대로 두시고,"
           " 아니라면 아이디/비밀번호 입력과 로그인, 이후 체크포인트/2단계 인증까지 직접 처리해주세요.")
@@ -196,7 +270,7 @@ def collect_links_for_keyword(drv, keyword: str) -> list[str]:
     # 인스타그램 해시태그는 공백을 허용하지 않으므로 태그에서는 공백을 제거한다
     # (결과 CSV의 '키워드' 컬럼에는 원래 관광지점명을 그대로 남긴다)
     tag = keyword.replace(" ", "")
-    drv.get(f"https://www.instagram.com/explore/tags/{tag}/")
+    safe_get(drv, f"https://www.instagram.com/explore/tags/{tag}/")
     time.sleep(3)
 
     try:
@@ -232,35 +306,77 @@ def collect_links_for_keyword(drv, keyword: str) -> list[str]:
     return list(links)[:LINKS_PER_KEYWORD]
 
 
-def main() -> None:
-    driver = build_driver()
-    login(driver)
+def load_done_keywords() -> set[str]:
+    if DONE_KEYWORDS_FILE.exists():
+        return {
+            line.strip()
+            for line in DONE_KEYWORDS_FILE.read_text(encoding="utf-8-sig").splitlines()
+            if line.strip()
+        }
+    return set()
 
-    print(f"[대상 키워드] {len(KEYWORDS)}개\n")
 
-    rows: list[dict] = []
-    for keyword in KEYWORDS:
-        print(f"[검색] {keyword}")
-        try:
-            links = collect_links_for_keyword(driver, keyword)
-        except Exception as e:
-            print(f"  ! 검색 실패: {e}")
-            time.sleep(SLEEP_BETWEEN_KEYWORDS_SEC)
-            continue
+def mark_keyword_done(keyword: str) -> None:
+    with DONE_KEYWORDS_FILE.open("a", encoding="utf-8-sig") as f:
+        f.write(keyword + "\n")
 
-        print(f"  -> {len(links)}건")
-        for url in links:
-            rows.append({"키워드": keyword, "채널": "인스타그램", "URL": url})
-        time.sleep(SLEEP_BETWEEN_KEYWORDS_SEC)
 
-    driver.quit()
+def append_checkpoint(rows: list[dict]) -> None:
+    if not rows:
+        return
+    write_header = not CHECKPOINT_CSV.exists()
+    pd.DataFrame(rows, columns=FIELDNAMES).to_csv(
+        CHECKPOINT_CSV, mode="a", index=False, header=write_header, encoding="utf-8-sig"
+    )
 
-    if rows:
-        df = pd.DataFrame(rows, columns=FIELDNAMES).drop_duplicates(subset="URL")
-        df.to_csv(OUTPUT_CSV, index=False, encoding="utf-8-sig")
-        print(f"\n[완료] {len(df)}건 저장 -> {OUTPUT_CSV.resolve()}")
-    else:
+
+def save_final_output() -> None:
+    if not CHECKPOINT_CSV.exists():
         print("\n[완료] 수집된 링크 없음")
+        return
+    df = pd.read_csv(CHECKPOINT_CSV, encoding="utf-8-sig", dtype=str)
+    df = df.drop_duplicates(subset="URL")
+    df.to_csv(OUTPUT_CSV, index=False, encoding="utf-8-sig")
+    print(f"\n[완료] {len(df)}건 저장 -> {OUTPUT_CSV.resolve()}")
+
+
+def main() -> None:
+    done_keywords = load_done_keywords()
+    remaining_keywords = [k for k in KEYWORDS if k not in done_keywords]
+
+    print(f"[📋] 전체 키워드 {len(KEYWORDS)}개 중 처리 완료 {len(done_keywords)}개, 남은 {len(remaining_keywords)}개")
+    if DONE_KEYWORDS_FILE.exists():
+        print(f"  (이어하기: {DONE_KEYWORDS_FILE.resolve()} 에서 이어서 처리합니다)")
+
+    if remaining_keywords:
+        driver = build_driver()
+        login(driver)
+
+        # watchdog은 사람이 수동으로 로그인/인증을 처리하는 동안 '멈춤'으로
+        # 오판하지 않도록, login()의 대기가 끝난 뒤부터 가동한다.
+        start_watchdog()
+        touch_heartbeat()
+
+        try:
+            for keyword in remaining_keywords:
+                print(f"[검색] {keyword}")
+                touch_heartbeat()
+                try:
+                    links = collect_links_for_keyword(driver, keyword)
+                except Exception as e:
+                    print(f"  ! 검색 실패: {e}")
+                    links = []
+
+                print(f"  -> {len(links)}건")
+                rows = [{"키워드": keyword, "채널": "인스타그램", "URL": url} for url in links]
+                append_checkpoint(rows)
+                mark_keyword_done(keyword)
+                touch_heartbeat()
+                time.sleep(SLEEP_BETWEEN_KEYWORDS_SEC)
+        finally:
+            driver.quit()
+
+    save_final_output()
 
 
 if __name__ == "__main__":
