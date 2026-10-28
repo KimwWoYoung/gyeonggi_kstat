@@ -7,3 +7,10 @@ __pycache__/
 # 디버깅용 임시 스크린샷
 sort_debug.png
 login_debug.png
+
+# 인스타그램 크롤링 진행 중 생기는 로컬 결과물 (기기마다 다름, 코드 추적 대상 아님)
+인스타그램/instagram_detail_202607_202609.xlsx
+인스타그램/instagram_detail_checkpoint.csv
+인스타그램/instagram_links.csv
+인스타그램/instagram_links_all.csv
+인스타그램/instagram_links_filtered.csv
