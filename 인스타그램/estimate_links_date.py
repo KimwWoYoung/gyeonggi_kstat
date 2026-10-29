@@ -36,9 +36,9 @@ FILTERED_OUTPUT_CSV = Path("instagram_links_filtered.csv")
 # 우선해 이 값을 쓰기로 함(더 안전하게 하려면 숫자를 늘릴 것).
 #
 # 10월로 추정되는(= 수집 기간보다 최신인) 게시물이 너무 많아서, 뒤쪽
-# 버퍼는 없애고(END_BUFFER_DAYS=0, 9월 30일에서 끊음) 앞쪽(6월 방향)만
-# 여유를 남겼다 — 비대칭 버퍼.
-START_BUFFER_DAYS = 7
+# 버퍼는 없애고(END_BUFFER_DAYS=0, 9월 30일에서 끊음) 앞쪽(6월 방향)도
+# 돌릴 시간이 부족해 0으로 없앰 — 정확히 7/1~9/30만 남긴다.
+START_BUFFER_DAYS = 0
 END_BUFFER_DAYS = 0
 START_DATE = datetime(2026, 7, 1, tzinfo=timezone.utc) - timedelta(days=START_BUFFER_DAYS)
 END_DATE = datetime(2026, 9, 30, 23, 59, 59, tzinfo=timezone.utc) + timedelta(days=END_BUFFER_DAYS)
