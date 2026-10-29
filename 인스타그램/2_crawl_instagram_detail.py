@@ -84,7 +84,7 @@ END_DATE = "2026-09-30"
 
 RESULT_COLUMNS = ["키워드", "채널", "본문", "작성일", "좋아요수", "댓글수", "URL"]
 
-SLEEP_BETWEEN_POSTS_SEC = (2.5, 4.5)
+SLEEP_BETWEEN_POSTS_SEC = (10.0, 15.0)
 
 # --- 멈춤 감지(watchdog) 관련 설정 ---
 PAGE_LOAD_TIMEOUT_SEC = 30          # drv.get() 이 이 시간 안에 안 끝나면 TimeoutException 발생
