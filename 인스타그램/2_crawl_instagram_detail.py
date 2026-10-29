@@ -41,9 +41,12 @@
          강제 종료한다. 지금까지의 결과는 CHECKPOINT_CSV에 이미 저장돼
          있으므로 스크립트를 다시 실행하면 멈췄던 지점부터 이어서 진행된다.
     또한 같은 세션에서 429(요청 제한) 응답이 연속으로
-    MAX_CONSECUTIVE_RATE_LIMIT 번 감지되면, 더 시도해도 계속 막힐
-    가능성이 높으므로 스스로 크롤링을 멈추고 종료한다(RATE_LIMIT_BACKOFF_SEC
-    만큼 대기 후 몇 번 더 재시도한 다음 그래도 안 되면 중단).
+    MAX_CONSECUTIVE_RATE_LIMIT 번 감지되면(매번 RATE_LIMIT_BACKOFF_SEC만큼
+    짧게 쉬며 재시도했는데도 계속 막히는 경우), 프로세스를 종료하지 않고
+    LONG_BACKOFF_SEC(기본 12시간) 동안 자동으로 쉬었다가 같은 프로세스
+    안에서 알아서 재시도한다. 로그인/본인확인 대기는 스크립트 시작 시
+    1번만 하면 되므로, 사람이 자리를 비운 동안(예: 주말)에도 켜둔 채로
+    두면 무인으로 계속 진행된다.
 
 주의 (선택자 관련):
     좋아요수/댓글수/본문은 우선 og:description 메타태그("123 likes, 4
@@ -58,6 +61,7 @@ import os
 import re
 import threading
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -90,8 +94,15 @@ SLEEP_BETWEEN_POSTS_SEC = (10.0, 15.0)
 PAGE_LOAD_TIMEOUT_SEC = 30          # drv.get() 이 이 시간 안에 안 끝나면 TimeoutException 발생
 STUCK_TIMEOUT_SEC = 300             # 이 시간 동안 진행(하트비트)이 없으면 프로세스 강제 종료
 WATCHDOG_CHECK_INTERVAL_SEC = 15
-MAX_CONSECUTIVE_RATE_LIMIT = 3      # 429(요청 제한)가 연속으로 이만큼 감지되면 크롤링 중단
+MAX_CONSECUTIVE_RATE_LIMIT = 3      # 429(요청 제한)가 연속으로 이만큼 감지되면 장시간 대기 모드로 전환
 RATE_LIMIT_BACKOFF_SEC = 60         # 429 감지 시 다음 시도 전 대기 시간
+
+# 사람이 없는 동안(예: 주말)에도 알아서 돌아가도록, 연속 429가
+# MAX_CONSECUTIVE_RATE_LIMIT번 뜨면 완전히 종료하는 대신 길게 쉬었다가
+# 자동으로 재시도한다 (로그인은 스크립트 시작 시 1번만 하면 되고, 이
+# 재시도는 같은 프로세스 안에서 계속 도는 것이라 로그인을 다시 하거나
+# Enter를 다시 누를 필요가 없다).
+LONG_BACKOFF_SEC = 12 * 60 * 60     # 3연속 429 감지 시 대기 시간: 12시간
 
 OG_DESC_RE = re.compile(
     r"^([\d,]+)\s+likes?,\s+([\d,]+)\s+comments?\s+-\s+.+?:\s*(.*)$",
@@ -111,6 +122,17 @@ def touch_heartbeat() -> None:
     global _last_heartbeat
     with _heartbeat_lock:
         _last_heartbeat = time.time()
+
+
+def sleep_with_heartbeat(total_sec: float) -> None:
+    """긴 시간을 한 번에 sleep하지 않고 잘게 나눠서, 그 사이사이 watchdog이
+    '멈춤'으로 오판해 프로세스를 죽이지 않도록 하트비트를 계속 찍는다."""
+    remaining = total_sec
+    chunk = min(WATCHDOG_CHECK_INTERVAL_SEC, 30)
+    while remaining > 0:
+        time.sleep(min(chunk, remaining))
+        remaining -= chunk
+        touch_heartbeat()
 
 
 def start_watchdog() -> None:
@@ -300,11 +322,17 @@ def main() -> None:
                     print(f"  ⚠️ {e} ({consecutive_rate_limit}/{MAX_CONSECUTIVE_RATE_LIMIT})")
                     touch_heartbeat()
                     if consecutive_rate_limit >= MAX_CONSECUTIVE_RATE_LIMIT:
+                        resume_at = datetime.now() + timedelta(seconds=LONG_BACKOFF_SEC)
                         print(
-                            "\n[⛔] 요청 제한(429)이 반복돼 크롤링을 중단합니다. "
-                            "잠시 후(예: 30분~1시간 뒤) 다시 실행하면 이어서 진행됩니다."
+                            f"\n[😴] 요청 제한(429)이 반복돼 {LONG_BACKOFF_SEC // 3600}시간 동안 "
+                            f"자동으로 쉬었다가 재시도합니다. (예상 재개 시각: "
+                            f"{resume_at.strftime('%Y-%m-%d %H:%M')} — 프로세스는 계속 켜둔 "
+                            "상태로 두세요, 로그인/Enter를 다시 할 필요 없습니다)"
                         )
-                        break
+                        sleep_with_heartbeat(LONG_BACKOFF_SEC)
+                        consecutive_rate_limit = 0
+                        print(f"\n[🔁] {LONG_BACKOFF_SEC // 3600}시간 경과, 재시도를 재개합니다.")
+                        continue
                     time.sleep(RATE_LIMIT_BACKOFF_SEC)
                     touch_heartbeat()
                     continue
