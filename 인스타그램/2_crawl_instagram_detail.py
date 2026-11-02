@@ -312,7 +312,7 @@ def main() -> None:
         try:
             for i, (idx, row) in enumerate(remaining.iterrows()):
                 url = row["URL"]
-                print(f"\n[{len(done_urls) + i + 1}/{len(df)}] {url}")
+                print(f"\n[이번 실행 {i + 1}/{len(remaining)} | 전체 목록 {len(df)}개 중 남은 것] {url}")
                 touch_heartbeat()
 
                 try:
