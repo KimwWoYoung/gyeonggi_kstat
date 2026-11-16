@@ -91,7 +91,8 @@ def parse_relative_date_kr(text: str, reference: datetime) -> "datetime | None":
         return None
     if "방금" in text:
         return reference
-    m = re.match(r"(\d+)\s*(초|분|시간|일|주|개월|달|년)\s*전", text)
+    # "수정일: 2년 전"처럼 앞에 접두어가 붙는 경우가 있어 match 대신 search를 쓴다.
+    m = re.search(r"(\d+)\s*(초|분|시간|일|주|개월|달|년)\s*전", text)
     if not m:
         return None
     n = int(m.group(1))
